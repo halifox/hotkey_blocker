@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
-#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -53,6 +52,16 @@ std::wstring Trim(std::wstring value) {
     while (!value.empty() && isWhitespace(value.back())) {
         value.pop_back();
     }
+    return value;
+}
+
+std::wstring AsciiLower(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t character) {
+        if (character >= L'A' && character <= L'Z') {
+            return static_cast<wchar_t>(character - L'A' + L'a');
+        }
+        return character;
+    });
     return value;
 }
 
@@ -199,6 +208,93 @@ void AddOrMerge(std::vector<DiscoveredApplication>& applications,
     }
 }
 
+bool IsPathUnderDirectory(const std::wstring& path, const std::wstring& directory) {
+    if (path.empty() || directory.empty()) {
+        return false;
+    }
+
+    std::wstring normalizedDirectory = ExpandEnvironmentVariables(directory);
+    normalizedDirectory = Trim(std::move(normalizedDirectory));
+    if (normalizedDirectory.empty()) {
+        return false;
+    }
+    std::replace(normalizedDirectory.begin(), normalizedDirectory.end(), L'/', L'\\');
+    while (normalizedDirectory.size() > 3 && normalizedDirectory.back() == L'\\') {
+        normalizedDirectory.pop_back();
+    }
+    if (normalizedDirectory.back() != L'\\') {
+        normalizedDirectory.push_back(L'\\');
+    }
+
+    const std::wstring normalizedPath = PathUtils::NormalizePath(path);
+    return normalizedPath.size() > normalizedDirectory.size() &&
+           CompareStringOrdinal(normalizedPath.c_str(),
+                                static_cast<int>(normalizedDirectory.size()),
+                                normalizedDirectory.c_str(),
+                                static_cast<int>(normalizedDirectory.size()), TRUE) ==
+               CSTR_EQUAL;
+}
+
+std::wstring FindExistingExecutableInDirectory(
+    const std::vector<DiscoveredApplication>& applications, const std::wstring& directory,
+    const std::wstring& displayName) {
+    if (directory.empty()) {
+        return {};
+    }
+
+    const std::wstring normalizedDisplayName = AsciiLower(Trim(displayName));
+    int bestScore = 0;
+    std::wstring bestPath;
+    for (const DiscoveredApplication& application : applications) {
+        if (!IsPathUnderDirectory(application.path, directory)) {
+            continue;
+        }
+
+        int score = 1;
+        if (AsciiLower(Trim(application.displayName)) == normalizedDisplayName) {
+            score += 100;
+        }
+        if (AsciiLower(std::filesystem::path(application.path).stem().wstring()) ==
+            normalizedDisplayName) {
+            score += 50;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestPath = application.path;
+        }
+    }
+    return bestPath;
+}
+
+DWORD ReadRegistryDword(HKEY key, const wchar_t* valueName) {
+    DWORD value = 0;
+    DWORD type = 0;
+    DWORD bytes = sizeof(value);
+    if (RegQueryValueExW(key, valueName, nullptr, &type, reinterpret_cast<LPBYTE>(&value),
+                         &bytes) != ERROR_SUCCESS ||
+        type != REG_DWORD || bytes != sizeof(value)) {
+        return 0;
+    }
+    return value;
+}
+
+bool IsRegistryUpdateEntry(HKEY key) {
+    if (ReadRegistryDword(key, L"SystemComponent") != 0 ||
+        ReadRegistryDword(key, L"NoDisplay") != 0) {
+        return true;
+    }
+
+    if (!ReadRegistryString(key, L"ParentKeyName").empty() ||
+        !ReadRegistryString(key, L"UpdateParent").empty()) {
+        return true;
+    }
+
+    const std::wstring releaseType = AsciiLower(Trim(ReadRegistryString(key, L"ReleaseType")));
+    return releaseType == L"update" || releaseType == L"hotfix" ||
+           releaseType == L"security update" || releaseType == L"update rollup" ||
+           releaseType == L"language pack" || releaseType == L"service pack";
+}
+
 std::wstring ShellItemProperty(IShellItem2* item, REFPROPERTYKEY key) {
     if (item == nullptr) {
         return {};
@@ -310,6 +406,7 @@ void ScanAppsFolder(std::vector<DiscoveredApplication>& applications,
             continue;
         }
 
+        const std::wstring displayName = ShellItemDisplayName(item);
         const std::wstring executable = ShellItemExecutable(item);
         if (executable.empty()) {
             ++stats->unresolvedEntries;
@@ -319,7 +416,7 @@ void ScanAppsFolder(std::vector<DiscoveredApplication>& applications,
 
         DiscoveredApplication application;
         application.path = executable;
-        application.displayName = ShellItemDisplayName(item);
+        application.displayName = displayName;
         AddOrMerge(applications, std::move(application));
         CoTaskMemFree(childId);
     }
@@ -349,6 +446,7 @@ void ScanStartMenuDirectory(const std::filesystem::path& root,
         }
 
         ++stats->startMenuShortcuts;
+        const std::wstring displayName = iterator->path().stem().wstring();
         const std::wstring target = ShortcutTarget(iterator->path());
         if (target.empty()) {
             ++stats->unresolvedEntries;
@@ -356,7 +454,7 @@ void ScanStartMenuDirectory(const std::filesystem::path& root,
         }
         DiscoveredApplication application;
         application.path = target;
-        application.displayName = iterator->path().stem().wstring();
+        application.displayName = displayName;
         AddOrMerge(applications, std::move(application));
     }
 }
@@ -457,9 +555,20 @@ void ScanUninstall(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& a
         }
         ++stats->uninstallEntries;
 
-        std::wstring executable = ParseExecutableValue(ReadRegistryString(entry, L"DisplayIcon"));
+        if (IsRegistryUpdateEntry(entry)) {
+            ++stats->filteredEntries;
+            RegCloseKey(entry);
+            continue;
+        }
+
+        const std::wstring displayIcon = ReadRegistryString(entry, L"DisplayIcon");
+        std::wstring executable = ParseExecutableValue(displayIcon);
         const std::wstring installLocation =
             ExpandEnvironmentVariables(ReadRegistryString(entry, L"InstallLocation"));
+        if (executable.empty()) {
+            executable = FindExistingExecutableInDirectory(applications, installLocation,
+                                                            displayName);
+        }
         if (executable.empty()) {
             executable = FindSingleExecutable(installLocation);
         }

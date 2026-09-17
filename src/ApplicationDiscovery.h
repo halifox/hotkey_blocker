@@ -23,6 +23,7 @@ struct DiscoveryStats {
     std::size_t appPathsEntries = 0;
     std::size_t uninstallEntries = 0;
     std::size_t unresolvedEntries = 0;
+    std::size_t filteredEntries = 0;
     std::size_t applications = 0;
 };
 

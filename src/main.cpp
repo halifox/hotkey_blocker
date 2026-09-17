@@ -766,6 +766,10 @@ private:
             result += L"，跳过 " + std::to_wstring(stats.unresolvedEntries) +
                       L" 个无法定位启动文件的条目";
         }
+        if (stats.filteredEntries != 0) {
+            result += L"，过滤 " + std::to_wstring(stats.filteredEntries) +
+                      L" 个系统组件或更新项";
+        }
         return result;
     }
 
