@@ -7,9 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(HKB_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin" CACHE PATH
         "Directory shared by the x64 and Win32 runtime artifacts")
 
-set(HKB_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/src/hkb.manifest")
-set_source_files_properties("${HKB_MANIFEST}" PROPERTIES HEADER_FILE_ONLY TRUE)
-
 add_library(detours STATIC
         third_party/detours/src/detours.cpp
         third_party/detours/src/modules.cpp
@@ -42,7 +39,6 @@ add_executable(hkb WIN32
         src/StartupManager.cpp
         src/main.cpp
         src/app.rc
-        "${HKB_MANIFEST}"
 )
 
 target_include_directories(hkb PRIVATE
@@ -58,6 +54,9 @@ target_compile_definitions(hkb PRIVATE
 
 if (MSVC)
     target_compile_options(hkb PRIVATE /utf-8)
+    target_link_options(hkb PRIVATE
+            "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    )
 endif ()
 
 target_link_libraries(hkb PRIVATE
@@ -66,15 +65,6 @@ target_link_libraries(hkb PRIVATE
         ole32
         shell32
 )
-
-if (MSVC)
-    add_custom_command(TARGET hkb POST_BUILD
-            COMMAND "${CMAKE_MT}"
-                    -manifest "${HKB_MANIFEST}"
-                    "-outputresource:$<TARGET_FILE:hkb>;#1"
-            VERBATIM
-    )
-endif ()
 
 set(HKB_ARCH_SUFFIX 32)
 if (CMAKE_SIZEOF_VOID_P EQUAL 8)
