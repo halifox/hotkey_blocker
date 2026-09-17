@@ -29,17 +29,12 @@
 #include <atomic>
 #include <filesystem>
 #include <iterator>
-#include <mutex>
-#include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
-#include "ApplicationDiscovery.h"
 #include "BlockerService.h"
 #include "Logger.h"
-#include "PathUtils.h"
 #include "RuleManager.h"
 #include "StartupManager.h"
 #include "resource.h"
@@ -51,7 +46,6 @@ namespace {
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
-constexpr UINT kDiscoveryCompletedMessage = WM_APP + 3;
 
 }  // namespace
 
@@ -62,15 +56,12 @@ public:
     explicit MainWindow(bool startHidden)
         : m_startHidden(startHidden), m_blockerService(&m_logger) {}
 
-    ~MainWindow() {
-        StopDiscoveryScan();
-    }
+    ~MainWindow() = default;
 
     BEGIN_MSG_MAP(MainWindow)
         MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
         MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
-        MESSAGE_HANDLER(kDiscoveryCompletedMessage, OnDiscoveryCompleted)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
@@ -88,12 +79,6 @@ private:
         std::wstring detail;
         int imageIndex = -1;
         bool isRule = false;
-    };
-
-    struct DiscoveryResult {
-        std::vector<DiscoveredApplication> applications;
-        std::wstring warning;
-        DiscoveryStats stats;
     };
 
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
@@ -127,7 +112,6 @@ private:
             ShowError(L"启动进程监控失败", L"无法创建进程监控线程");
         }
         RefreshListView(true);
-        StartDiscoveryScan();
 
         m_trayIconAdded = AddTrayIcon();
         NotifyActionableStates();
@@ -166,47 +150,14 @@ private:
         return 0;
     }
 
-    LRESULT OnDiscoveryCompleted(UINT, WPARAM, LPARAM, BOOL& handled) {
-        handled = TRUE;
-        if (m_discoveryThread.joinable()) {
-            m_discoveryThread.join();
-        }
-
-        std::optional<DiscoveryResult> result;
-        {
-            std::lock_guard lock(m_discoveryMutex);
-            result = std::move(m_pendingDiscovery);
-            m_pendingDiscovery.reset();
-        }
-        m_discoveryRunning.store(false, std::memory_order_release);
-        if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
-            ::EnableWindow(refreshButton, TRUE);
-        }
-        if (!result.has_value()) {
-            return 0;
-        }
-        if (!result->warning.empty()) {
-            m_logger.Error(L"应用扫描提示：" + result->warning);
-        }
-        m_discoveredApps = std::move(result->applications);
-        m_discoveryStats = result->stats;
-        SetScanStatusText(DiscoverySummary(m_discoveryStats));
-        m_logger.Info(L"应用扫描完成：" + DiscoverySummary(m_discoveryStats));
-        RefreshListView(true);
-        return 0;
-    }
-
     LRESULT OnCommand(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
         handled = TRUE;
         switch (LOWORD(wParam)) {
-            case IDC_ADD_APP:
-                AddSelectedApplication();
+            case IDC_ADD_EXECUTABLE:
+                AddExecutableApplication();
                 break;
-            case IDC_ADD_PORTABLE:
-                AddPortableApplication();
-                break;
-            case IDC_REFRESH_APPS:
-                StartDiscoveryScan();
+            case IDC_ADD_FOLDER:
+                AddFolderApplication();
                 break;
             case IDC_DELETE_APP:
                 DeleteSelectedApplication();
@@ -253,13 +204,7 @@ private:
         }
         if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
             handled = TRUE;
-            const int index = SelectedIndex();
-            if (index >= 0 && index < static_cast<int>(m_renderedRows.size()) &&
-                !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
-                AddSelectedApplication();
-            } else {
-                OpenSelectedLocation();
-            }
+            OpenSelectedLocation();
             return 0;
         }
         handled = FALSE;
@@ -279,7 +224,6 @@ private:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         m_blockerService.SetStateChangedCallback({});
-        StopDiscoveryScan();
         m_blockerService.Stop();
         RemoveTrayIcon();
         m_logger.Info(L"程序退出");
@@ -426,27 +370,13 @@ private:
     std::vector<DisplayRow> BuildDisplayRows() const {
         const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
         std::vector<DisplayRow> rows;
-        rows.reserve(states.size() + m_discoveredApps.size());
+        rows.reserve(states.size());
 
         const auto displayNameForRule = [](const AppRule& rule) {
             if (!rule.displayName.empty()) {
                 return rule.displayName;
             }
             return std::filesystem::path(rule.path).stem().wstring();
-        };
-
-        const auto hasRuleTarget = [&states](const std::wstring& path) {
-            for (const RuntimeRuleState& state : states) {
-                if (PathUtils::SamePath(state.rule.path, path)) {
-                    return true;
-                }
-                for (const std::wstring& target : state.rule.targets) {
-                    if (PathUtils::SamePath(target, path)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
         };
 
         for (const RuntimeRuleState& state : states) {
@@ -465,34 +395,13 @@ private:
                 }
                 row.detail += L"目标进程 " + std::to_wstring(state.rule.targets.size()) + L" 个";
             }
-            row.isRule = true;
-            rows.push_back(std::move(row));
-        }
-
-        for (const DiscoveredApplication& application : m_discoveredApps) {
-            if (hasRuleTarget(application.path)) {
-                continue;
-            }
-            DisplayRow row;
-            row.key = application.path;
-            row.name = application.displayName.empty()
-                           ? std::filesystem::path(application.path).stem().wstring()
-                           : application.displayName;
-            row.path = application.path;
-            row.source = AppSourceText(application.source);
-            row.enabled = L"—";
-            row.status.clear();
-            row.imageIndex = FileIconIndex(application.path);
-            row.detail = application.publisher;
-            if (!application.version.empty()) {
+            if (state.rule.recursive) {
                 if (!row.detail.empty()) {
                     row.detail += L"；";
                 }
-                row.detail += L"版本 " + application.version;
+                row.detail += L"拦截文件夹内所有 EXE";
             }
-            if (row.detail.empty()) {
-                row.detail = L"选择后加入拦截规则";
-            }
+            row.isRule = true;
             rows.push_back(std::move(row));
         }
         return rows;
@@ -571,43 +480,76 @@ private:
         return ListView_GetNextItem(m_listView, -1, LVNI_SELECTED);
     }
 
-    std::vector<int> SelectedIndices() const {
-        std::vector<int> indices;
-        if (m_listView == nullptr) {
-            return indices;
+    bool PickApplicationPath(bool folder, std::wstring& path) {
+        CComPtr<IFileOpenDialog> dialog;
+        HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                           IID_PPV_ARGS(&dialog));
+        if (FAILED(result)) {
+            ShowErrorCode(L"创建文件选择器失败", result);
+            return false;
         }
-        for (int index = -1;;) {
-            index = ListView_GetNextItem(m_listView, index, LVNI_SELECTED);
-            if (index < 0) {
-                break;
+
+        FILEOPENDIALOGOPTIONS options = 0;
+        result = dialog->GetOptions(&options);
+        if (FAILED(result)) {
+            ShowErrorCode(L"配置文件选择器失败", result);
+            return false;
+        }
+        options |= FOS_FORCEFILESYSTEM;
+        if (folder) {
+            options |= FOS_PICKFOLDERS | FOS_PATHMUSTEXIST;
+            dialog->SetTitle(L"选择要拦截的程序文件夹");
+        } else {
+            options |= FOS_FILEMUSTEXIST;
+            const COMDLG_FILTERSPEC filters[] = {{L"应用程序 (*.exe)", L"*.exe"}};
+            result = dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
+            if (FAILED(result)) {
+                ShowErrorCode(L"配置文件选择器失败", result);
+                return false;
             }
-            indices.push_back(index);
+            dialog->SetTitle(L"选择要拦截的 EXE 文件");
         }
-        return indices;
+        result = dialog->SetOptions(options);
+        if (FAILED(result)) {
+            ShowErrorCode(L"配置文件选择器失败", result);
+            return false;
+        }
+        result = dialog->Show(m_hWnd);
+        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+            return false;
+        }
+        if (FAILED(result)) {
+            ShowErrorCode(L"打开文件选择器失败", result);
+            return false;
+        }
+
+        CComPtr<IShellItem> item;
+        result = dialog->GetResult(&item);
+        if (FAILED(result)) {
+            ShowErrorCode(L"获取所选文件失败", result);
+            return false;
+        }
+
+        PWSTR rawPath = nullptr;
+        result = item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath);
+        if (FAILED(result) || rawPath == nullptr) {
+            ShowErrorCode(L"获取所选文件路径失败", result);
+            return false;
+        }
+        path.assign(rawPath);
+        CoTaskMemFree(rawPath);
+        return true;
     }
 
-    void AddSelectedApplication() {
-        const std::vector<int> selected = SelectedIndices();
-        std::vector<const DisplayRow*> candidates;
-        for (const int index : selected) {
-            if (index >= 0 && index < static_cast<int>(m_renderedRows.size()) &&
-                !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
-                candidates.push_back(&m_renderedRows[static_cast<std::size_t>(index)]);
-            }
-        }
-        if (candidates.empty()) {
-            ShowError(L"添加应用失败", L"请先选择一个未添加的已安装程序；便携程序请使用“添加便携程序”");
+    void AddExecutableApplication() {
+        std::wstring path;
+        if (!PickApplicationPath(false, path)) {
             return;
         }
 
         AppRule rule;
-        rule.path = candidates.front()->path;
-        rule.displayName = candidates.front()->name;
-        rule.source = AppSource::Installed;
-        rule.enabled = true;
-        for (const DisplayRow* candidate : candidates) {
-            rule.targets.push_back(candidate->path);
-        }
+        rule.path = std::move(path);
+        rule.source = AppSource::Manual;
         if (!m_ruleManager.AddRule(std::move(rule))) {
             ShowError(L"添加应用失败", m_ruleManager.LastError());
             return;
@@ -616,45 +558,22 @@ private:
         RefreshListView(true);
     }
 
-    void AddPortableApplication() {
-        CComPtr<IFileOpenDialog> dialog;
-        HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
-                                           IID_PPV_ARGS(&dialog));
-        if (FAILED(result)) {
-            ShowErrorCode(L"创建文件选择器失败", result);
+    void AddFolderApplication() {
+        std::wstring path;
+        if (!PickApplicationPath(true, path)) {
             return;
         }
 
-        const COMDLG_FILTERSPEC filters[] = {{L"应用程序 (*.exe)", L"*.exe"}};
-        dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
-        dialog->SetTitle(L"选择便携式应用程序");
-        result = dialog->Show(m_hWnd);
-        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
-            return;
+        AppRule rule;
+        rule.path = std::move(path);
+        rule.displayName = std::filesystem::path(rule.path).filename().wstring();
+        if (rule.displayName.empty()) {
+            rule.displayName = rule.path;
         }
-        if (FAILED(result)) {
-            ShowErrorCode(L"打开文件选择器失败", result);
-            return;
-        }
-
-        CComPtr<IShellItem> item;
-        result = dialog->GetResult(&item);
-        if (FAILED(result)) {
-            ShowErrorCode(L"获取所选文件失败", result);
-            return;
-        }
-
-        PWSTR path = nullptr;
-        result = item->GetDisplayName(SIGDN_FILESYSPATH, &path);
-        if (FAILED(result) || path == nullptr) {
-            ShowErrorCode(L"获取所选文件路径失败", result);
-            return;
-        }
-
-        const bool added = m_ruleManager.Add(path);
-        CoTaskMemFree(path);
-        if (!added) {
-            ShowError(L"添加应用失败", m_ruleManager.LastError());
+        rule.source = AppSource::Manual;
+        rule.recursive = true;
+        if (!m_ruleManager.AddRule(std::move(rule))) {
+            ShowError(L"添加文件夹失败", m_ruleManager.LastError());
             return;
         }
         m_blockerService.UpdateRules(m_ruleManager.Rules());
@@ -716,49 +635,6 @@ private:
         }
     }
 
-    void StartDiscoveryScan() {
-        if (m_discoveryRunning.exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-
-        m_discoveryCancel.store(false, std::memory_order_release);
-        SetScanStatusText(L"正在扫描已安装程序...");
-        if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
-            ::EnableWindow(refreshButton, FALSE);
-        }
-
-        const HWND window = m_hWnd;
-        try {
-            m_discoveryThread = std::thread([this, window] {
-                DiscoveryResult result;
-                result.applications = ApplicationDiscovery::Scan(
-                    result.warning, &m_discoveryCancel, &result.stats);
-                {
-                    std::lock_guard lock(m_discoveryMutex);
-                    m_pendingDiscovery = std::move(result);
-                }
-                if (window != nullptr) {
-                    ::PostMessageW(window, kDiscoveryCompletedMessage, 0, 0);
-                }
-            });
-        } catch (...) {
-            m_discoveryRunning.store(false, std::memory_order_release);
-            if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
-                ::EnableWindow(refreshButton, TRUE);
-            }
-            SetScanStatusText(L"应用扫描启动失败");
-            ShowError(L"刷新程序失败", L"无法创建应用扫描线程");
-        }
-    }
-
-    void StopDiscoveryScan() {
-        m_discoveryCancel.store(true, std::memory_order_release);
-        if (m_discoveryThread.joinable()) {
-            m_discoveryThread.join();
-        }
-        m_discoveryRunning.store(false, std::memory_order_release);
-    }
-
     void UpdateAutoStart() {
         const bool enabled = ::IsDlgButtonChecked(m_hWnd, IDC_AUTOSTART) == BST_CHECKED;
         const bool previous = m_ruleManager.AutoStart();
@@ -790,29 +666,6 @@ private:
             case AppStatus::Disabled:
             default:
                 return false;
-        }
-    }
-
-    static std::wstring DiscoverySummary(const DiscoveryStats& stats) {
-        std::wstring result = L"发现 " + std::to_wstring(stats.applications) + L" 个可用程序";
-        if (stats.fixedExecutableEntries != 0) {
-            result += L"，检查 " + std::to_wstring(stats.fixedExecutableEntries) +
-                      L" 个固定目录程序文件";
-        }
-        if (stats.unresolvedEntries != 0) {
-            result += L"，跳过 " + std::to_wstring(stats.unresolvedEntries) +
-                      L" 个无法定位启动文件的条目";
-        }
-        if (stats.filteredEntries != 0) {
-            result += L"，过滤 " + std::to_wstring(stats.filteredEntries) +
-                      L" 个系统组件、更新项、辅助程序或低信息文件";
-        }
-        return result;
-    }
-
-    void SetScanStatusText(const std::wstring& text) const {
-        if (HWND status = GetDlgItem(IDC_SCAN_STATUS); status != nullptr) {
-            ::SetWindowTextW(status, text.c_str());
         }
     }
 
@@ -891,16 +744,9 @@ private:
     StartupManager m_startupManager;
     BlockerService m_blockerService;
     std::vector<DisplayRow> m_renderedRows;
-    std::vector<DiscoveredApplication> m_discoveredApps;
-    DiscoveryStats m_discoveryStats;
     mutable std::unordered_map<std::wstring, int> m_iconIndices;
     std::unordered_map<std::wstring, AppStatus> m_notifiedActionableStates;
     std::atomic_bool m_stateNotificationPosted = false;
-    std::atomic_bool m_discoveryRunning = false;
-    std::atomic_bool m_discoveryCancel = false;
-    std::mutex m_discoveryMutex;
-    std::optional<DiscoveryResult> m_pendingDiscovery;
-    std::thread m_discoveryThread;
 };
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {

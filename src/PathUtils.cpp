@@ -112,9 +112,28 @@ bool SamePath(const std::wstring& left, const std::wstring& right) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
+bool IsPathUnderDirectory(const std::wstring& path, const std::wstring& directory) {
+    const std::wstring normalizedPath = NormalizePath(path);
+    std::wstring normalizedDirectory = NormalizePath(directory);
+    if (normalizedPath.empty() || normalizedDirectory.empty()) {
+        return false;
+    }
+
+    if (normalizedDirectory.back() != L'\\') {
+        normalizedDirectory.push_back(L'\\');
+    }
+    return normalizedPath.size() > normalizedDirectory.size() &&
+           CompareStringOrdinal(normalizedPath.c_str(),
+                                static_cast<int>(normalizedDirectory.size()),
+                                normalizedDirectory.c_str(),
+                                static_cast<int>(normalizedDirectory.size()), TRUE) ==
+               CSTR_EQUAL;
+}
+
 int FindRuleIndex(const std::vector<AppRule>& rules, const std::wstring& path) {
     for (std::size_t index = 0; index < rules.size(); ++index) {
-        if (SamePath(rules[index].path, path)) {
+        if (SamePath(rules[index].path, path) ||
+            (rules[index].recursive && IsPathUnderDirectory(path, rules[index].path))) {
             return static_cast<int>(index);
         }
     }

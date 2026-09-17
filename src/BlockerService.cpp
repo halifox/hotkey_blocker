@@ -11,6 +11,10 @@ namespace {
 
 template <typename Callback>
 void ForEachRuleTarget(const AppRule& rule, Callback callback) {
+    if (rule.recursive) {
+        return;
+    }
+
     bool hasPrimary = false;
     if (!rule.path.empty()) {
         callback(rule.path);
@@ -24,6 +28,12 @@ void ForEachRuleTarget(const AppRule& rule, Callback callback) {
 }
 
 bool AnyRuleTargetExists(const AppRule& rule) {
+    if (rule.recursive) {
+        const DWORD attributes = GetFileAttributesW(rule.path.c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES &&
+               (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+
     bool exists = false;
     ForEachRuleTarget(rule, [&exists](const std::wstring& target) {
         if (GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -338,7 +348,18 @@ void BlockerService::RebuildRuleIndexLocked() {
 
 int BlockerService::FindRuleIndexLocked(const std::wstring& path) const {
     const auto iterator = m_ruleIndices.find(path);
-    return iterator == m_ruleIndices.end() ? -1 : static_cast<int>(iterator->second);
+    if (iterator != m_ruleIndices.end()) {
+        return static_cast<int>(iterator->second);
+    }
+
+    for (std::size_t index = 0; index < m_rules.size(); ++index) {
+        if (m_rules[index].recursive &&
+            (PathUtils::SamePath(path, m_rules[index].path) ||
+             PathUtils::IsPathUnderDirectory(path, m_rules[index].path))) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
 }
 
 void BlockerService::NotifyStateChanged() const {
@@ -459,6 +480,10 @@ std::wstring BlockerService::DetailForRule(
 int BlockerService::FindRuleIndex(const std::vector<AppRule>& rules,
                                   const std::wstring& path) {
     for (std::size_t index = 0; index < rules.size(); ++index) {
+        if (rules[index].recursive && PathUtils::IsPathUnderDirectory(path, rules[index].path)) {
+            return static_cast<int>(index);
+        }
+
         bool matched = false;
         ForEachRuleTarget(rules[index], [&matched, &path](const std::wstring& target) {
             matched = matched || PathUtils::SamePath(target, path);

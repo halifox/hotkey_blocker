@@ -141,14 +141,17 @@ int wmain() {
         return 3;
     }
 
-    const std::wstring rulePath = PathUtils::NormalizePath(probe.wstring());
+    AppRule folderRule;
+    folderRule.path = PathUtils::NormalizePath(directory.wstring());
+    folderRule.displayName = L"测试程序文件夹";
+    folderRule.recursive = true;
     const std::filesystem::path logPath = std::filesystem::path(temporaryFile).wstring() +
                                           L".log";
     Logger logger(logPath);
     BlockerService service(&logger);
     StateWaiter waiter;
     service.SetStateChangedCallback([&waiter] { waiter.Notify(); });
-    const std::vector<AppRule> rules = {{rulePath, true}};
+    const std::vector<AppRule> rules = {folderRule};
     if (!service.Start(rules)) {
         CloseHandle(ready);
         CloseHandle(release);

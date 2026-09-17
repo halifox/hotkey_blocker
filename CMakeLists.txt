@@ -27,7 +27,6 @@ if (MSVC)
 endif ()
 
 add_executable(hkb WIN32
-        src/ApplicationDiscovery.cpp
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
         src/ConfigStore.cpp
@@ -65,7 +64,6 @@ target_link_libraries(hkb PRIVATE
         comctl32
         ole32
         shell32
-        version
         wbemuuid
 )
 

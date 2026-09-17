@@ -23,6 +23,7 @@ struct AppRule {
     std::wstring displayName;
     std::vector<std::wstring> targets;
     AppSource source = AppSource::Manual;
+    bool recursive = false;
 };
 
 struct AppConfig {

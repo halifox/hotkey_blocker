@@ -2,6 +2,8 @@
 
 #include "PathUtils.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <utility>
@@ -27,12 +29,52 @@ bool ContainsPath(const AppRule& rule, const std::wstring& path) {
     if (PathUtils::SamePath(rule.path, path)) {
         return true;
     }
+    if (rule.recursive && PathUtils::IsPathUnderDirectory(path, rule.path)) {
+        return true;
+    }
     return std::any_of(rule.targets.begin(), rule.targets.end(), [&path](const std::wstring& target) {
         return PathUtils::SamePath(target, path);
     });
 }
 
+bool RulesOverlap(const AppRule& left, const AppRule& right) {
+    if (ContainsPath(left, right.path) || ContainsPath(right, left.path)) {
+        return true;
+    }
+    for (const std::wstring& target : left.targets) {
+        if (ContainsPath(right, target)) {
+            return true;
+        }
+    }
+    for (const std::wstring& target : right.targets) {
+        if (ContainsPath(left, target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool NormalizeRule(AppRule& rule) {
+    if (rule.recursive) {
+        const std::wstring normalizedPath = PathUtils::NormalizePath(rule.path);
+        if (normalizedPath.empty()) {
+            return false;
+        }
+
+        const DWORD attributes = GetFileAttributesW(normalizedPath.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            return false;
+        }
+
+        rule.path = normalizedPath;
+        rule.targets.clear();
+        if (rule.displayName.empty()) {
+            rule.displayName = DefaultDisplayName(rule.path);
+        }
+        return true;
+    }
+
     std::vector<std::wstring> normalizedTargets;
     const auto addTarget = [&normalizedTargets](const std::wstring& target) {
         const std::wstring normalized = PathUtils::NormalizePath(target);
@@ -87,10 +129,7 @@ bool RuleManager::Load() {
 
         const auto duplicate = std::find_if(
             normalizedRules.begin(), normalizedRules.end(), [&rule](const AppRule& existing) {
-                return std::any_of(rule.targets.begin(), rule.targets.end(),
-                                   [&existing](const std::wstring& target) {
-                                       return ContainsPath(existing, target);
-                                   });
+                return RulesOverlap(existing, rule);
             });
         if (duplicate == normalizedRules.end()) {
             normalizedRules.push_back(std::move(rule));
@@ -122,16 +161,13 @@ bool RuleManager::Add(const std::wstring& path) {
 
 bool RuleManager::AddRule(AppRule rule) {
     if (!NormalizeRule(rule)) {
-        m_lastError = L"只能添加至少一个有效的 .exe 应用程序";
+        m_lastError = L"只能添加有效的 .exe 文件或文件夹";
         return false;
     }
 
     const auto duplicate = std::find_if(
         m_config.apps.begin(), m_config.apps.end(), [&rule](const AppRule& existing) {
-            return std::any_of(rule.targets.begin(), rule.targets.end(),
-                               [&existing](const std::wstring& target) {
-                                   return ContainsPath(existing, target);
-                               });
+            return RulesOverlap(existing, rule);
         });
     if (duplicate != m_config.apps.end()) {
         m_lastError = L"该应用或目标进程已经添加";

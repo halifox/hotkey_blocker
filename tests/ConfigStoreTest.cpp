@@ -22,7 +22,8 @@ bool SameConfig(const AppConfig& left, const AppConfig& right) {
     }
     for (std::size_t index = 0; index < left.apps.size(); ++index) {
         if (left.apps[index].path != right.apps[index].path ||
-            left.apps[index].enabled != right.apps[index].enabled) {
+            left.apps[index].enabled != right.apps[index].enabled ||
+            left.apps[index].recursive != right.apps[index].recursive) {
             return false;
         }
     }
@@ -47,11 +48,16 @@ int wmain() {
     DeleteFileW(configPath.c_str());
     DeleteFileW((configPath.wstring() + L".tmp").c_str());
 
-    const AppConfig expected{
+    AppConfig expected{
         2,
         true,
         {{L"C:\\程序\\示例.exe", true}, {L"D:\\工具\\禁用.exe", false}},
     };
+    AppRule folderRule;
+    folderRule.path = temporaryDirectory;
+    folderRule.displayName = L"测试文件夹";
+    folderRule.recursive = true;
+    expected.apps.push_back(folderRule);
 
     ConfigStore store(configPath);
     std::wstring error;

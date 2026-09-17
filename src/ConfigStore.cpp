@@ -383,9 +383,11 @@ std::wstring SerializeIni(const AppConfig& config) {
                 targets.push_back(target);
             }
         };
-        addTarget(config.apps[index].path);
-        for (const std::wstring& target : config.apps[index].targets) {
-            addTarget(target);
+        if (!config.apps[index].recursive) {
+            addTarget(config.apps[index].path);
+            for (const std::wstring& target : config.apps[index].targets) {
+                addTarget(target);
+            }
         }
 
         output += L"\r\n[App." + std::to_wstring(index + 1) + L"]\r\n";
@@ -396,6 +398,9 @@ std::wstring SerializeIni(const AppConfig& config) {
         output += L"Enabled=" + std::to_wstring(config.apps[index].enabled ? 1 : 0) + L"\r\n";
         output += L"Source=" +
                   std::to_wstring(static_cast<int>(config.apps[index].source)) + L"\r\n";
+        if (config.apps[index].recursive) {
+            output += L"Recursive=1\r\n";
+        }
         output += L"TargetCount=" + std::to_wstring(targets.size()) + L"\r\n";
         for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
             output += L"Target" + std::to_wstring(targetIndex + 1) + L"=" +
@@ -508,6 +513,11 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
                 error = section.name + L".Source 不是有效来源类型";
                 return false;
             }
+            if (const std::wstring* recursive = FindValue(section, L"recursive");
+                recursive != nullptr && !ParseBoolean(*recursive, rule.recursive)) {
+                error = section.name + L".Recursive 不是有效布尔值";
+                return false;
+            }
 
             int targetCount = 0;
             if (const std::wstring* count = FindValue(section, L"targetcount");
@@ -527,7 +537,7 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
                 rule.targets.push_back(*target);
             }
         }
-        if (rule.targets.empty()) {
+        if (!rule.recursive && rule.targets.empty()) {
             rule.targets.push_back(rule.path);
         }
         indexedRules.push_back({index, std::move(rule)});
