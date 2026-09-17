@@ -35,9 +35,16 @@ std::wstring Win32Error(const wchar_t* operation, DWORD errorCode = GetLastError
 bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
     error.clear();
     HKEY key = nullptr;
-    LSTATUS status = RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE,
-                                     nullptr, &key, nullptr);
+    LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0,
+                                   KEY_QUERY_VALUE | KEY_SET_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND && enabled) {
+        status = RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0,
+                                 KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
+    }
     if (status != ERROR_SUCCESS) {
+        if (!enabled && status == ERROR_FILE_NOT_FOUND) {
+            return true;
+        }
         error = Win32Error(L"打开开机启动注册表项", static_cast<DWORD>(status));
         return false;
     }
@@ -55,6 +62,22 @@ bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
             return false;
         }
         const std::wstring command = L"\"" + executablePath + L"\" --background";
+
+        DWORD type = 0;
+        DWORD bytes = 0;
+        status = RegQueryValueExW(key, kValueName, nullptr, &type, nullptr, &bytes);
+        if (status == ERROR_SUCCESS && type == REG_SZ && bytes >= sizeof(wchar_t)) {
+            std::vector<wchar_t> existing(bytes / sizeof(wchar_t) + 1, L'\0');
+            DWORD existingBytes = bytes;
+            status = RegQueryValueExW(key, kValueName, nullptr, &type,
+                                      reinterpret_cast<BYTE*>(existing.data()), &existingBytes);
+            if (status == ERROR_SUCCESS &&
+                std::wstring(existing.data()) == command) {
+                RegCloseKey(key);
+                return true;
+            }
+        }
+
         status = RegSetValueExW(key, kValueName, 0, REG_SZ,
                                 reinterpret_cast<const BYTE*>(command.c_str()),
                                 static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));

@@ -7,6 +7,7 @@
 #include <iterator>
 #include <utility>
 #include <vector>
+#include <thread>
 
 namespace {
 
@@ -44,6 +45,23 @@ std::wstring FullPath(const std::wstring& path) {
     }
     result.resize(written);
     return result;
+}
+
+void ReapTimedOutRemoteThread(HANDLE process, HANDLE remoteThread, LPVOID remotePath) {
+    try {
+        std::thread([process, remoteThread, remotePath] {
+            // The remote thread may still be using the path buffer. Keep both
+            // handles alive until it exits, then release the target allocation.
+            WaitForSingleObject(remoteThread, INFINITE);
+            VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
+            CloseHandle(remoteThread);
+            CloseHandle(process);
+        }).detach();
+    } catch (...) {
+        // There is no safe way to free remotePath while the remote thread may
+        // still be reading it. Keep the original handles/remote allocation
+        // alive only as a last-resort leak until the target process exits.
+    }
 }
 
 }  // namespace
@@ -113,16 +131,12 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
     const DWORD waitResult = WaitForSingleObject(remoteThread, kInjectionTimeoutMs);
     if (waitResult == WAIT_TIMEOUT) {
         result.error = L"等待远程 DLL 加载超时";
-        // The remote thread may still be using remotePath, so leave that allocation
-        // untouched rather than freeing memory owned by a live thread.
-        CloseHandle(remoteThread);
-        CloseHandle(process);
+        ReapTimedOutRemoteThread(process, remoteThread, remotePath);
         return result;
     }
     if (waitResult != WAIT_OBJECT_0) {
         result.error = Win32Error(L"等待远程线程失败");
-        CloseHandle(remoteThread);
-        CloseHandle(process);
+        ReapTimedOutRemoteThread(process, remoteThread, remotePath);
         return result;
     }
 

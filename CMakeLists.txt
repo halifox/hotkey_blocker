@@ -64,6 +64,7 @@ target_link_libraries(hkb PRIVATE
         comctl32
         ole32
         shell32
+        wbemuuid
 )
 
 set(HKB_ARCH_SUFFIX 32)
@@ -227,8 +228,9 @@ if (HKB_BUILD_TESTS)
             target_compile_options(hkb_blocker_service_integration_test PRIVATE /utf-8)
         endif ()
         target_link_libraries(hkb_blocker_service_integration_test PRIVATE
-                shell32
-                user32
+            shell32
+            user32
+            wbemuuid
         )
         add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
         set_target_properties(hkb_blocker_service_integration_test PROPERTIES

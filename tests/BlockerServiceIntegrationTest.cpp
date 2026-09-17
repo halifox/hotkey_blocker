@@ -10,6 +10,8 @@
 #include <iostream>
 #include <iterator>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -61,10 +63,21 @@ std::wstring UniqueName(const wchar_t* prefix) {
            std::to_wstring(GetTickCount64());
 }
 
-bool WaitForStatus(BlockerService& service, AppStatus expected, DWORD timeoutMs,
-                   std::wstring& detail) {
-    const ULONGLONG deadline = GetTickCount64() + timeoutMs;
-    while (GetTickCount64() < deadline) {
+struct StateWaiter {
+    std::mutex mutex;
+    std::condition_variable condition;
+
+    void Notify() {
+        std::lock_guard lock(mutex);
+        condition.notify_all();
+    }
+};
+
+bool WaitForStatus(BlockerService& service, StateWaiter& waiter, AppStatus expected,
+                   DWORD timeoutMs, std::wstring& detail) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs);
+    const auto matches = [&] {
         const std::vector<RuntimeRuleState> states = service.Snapshot();
         if (!states.empty()) {
             detail = states.front().detail;
@@ -75,13 +88,14 @@ bool WaitForStatus(BlockerService& service, AppStatus expected, DWORD timeoutMs,
                 return false;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        return false;
+    };
+
+    if (matches()) {
+        return true;
     }
-    const std::vector<RuntimeRuleState> states = service.Snapshot();
-    if (!states.empty()) {
-        detail = states.front().detail;
-    }
-    return !states.empty() && states.front().status == expected;
+    std::unique_lock lock(waiter.mutex);
+    return waiter.condition.wait_until(lock, deadline, matches);
 }
 
 bool ReadText(const std::filesystem::path& path, std::string& text) {
@@ -132,6 +146,8 @@ int wmain() {
                                           L".log";
     Logger logger(logPath);
     BlockerService service(&logger);
+    StateWaiter waiter;
+    service.SetStateChangedCallback([&waiter] { waiter.Notify(); });
     if (!service.Start({{rulePath, true}})) {
         CloseHandle(ready);
         CloseHandle(release);
@@ -140,9 +156,14 @@ int wmain() {
         return 4;
     }
 
-    // Let the initial scan finish so the child is observed as a newly started
-    // process and must go through the automatic injection path.
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    if (!service.WaitUntilReady(5000)) {
+        service.Stop();
+        CloseHandle(ready);
+        CloseHandle(release);
+        DeleteFileW(outputPath.c_str());
+        DeleteFileW(logPath.c_str());
+        return 5;
+    }
 
     std::wstring commandLine = Quote(probe.wstring()) + L" " + Quote(readyName) + L" " +
                                Quote(releaseName) + L" " + Quote(outputPath.wstring());
@@ -164,7 +185,7 @@ int wmain() {
     int result = 6;
     std::wstring detail;
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0 &&
-        WaitForStatus(service, AppStatus::Blocked, 10000, detail)) {
+        WaitForStatus(service, waiter, AppStatus::Blocked, 10000, detail)) {
         SetEvent(release);
         if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
             DWORD childExitCode = 1;
@@ -190,7 +211,7 @@ int wmain() {
 
     if (result == 0) {
         std::wstring exitDetail;
-        if (!WaitForStatus(service, AppStatus::Waiting, 5000, exitDetail)) {
+        if (!WaitForStatus(service, waiter, AppStatus::Waiting, 5000, exitDetail)) {
             std::wcerr << L"目标进程退出后未恢复等待状态：" << exitDetail << L'\n';
             result = 7;
         }
@@ -200,8 +221,12 @@ int wmain() {
     CloseHandle(ready);
     CloseHandle(release);
     DeleteFileW(outputPath.c_str());
-    DeleteFileW(logPath.c_str());
-    DeleteFileW((logPath.wstring() + L".1").c_str());
-    DeleteFileW((logPath.wstring() + L".2").c_str());
+    if (result == 0) {
+        DeleteFileW(logPath.c_str());
+        DeleteFileW((logPath.wstring() + L".1").c_str());
+        DeleteFileW((logPath.wstring() + L".2").c_str());
+    } else {
+        std::wcerr << L"保留失败日志：" << logPath.wstring() << L'\n';
+    }
     return result;
 }

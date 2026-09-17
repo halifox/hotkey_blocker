@@ -25,6 +25,8 @@
 #include <atlwin.h>
 #include <atldlgs.h>
 
+#include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <iterator>
 #include <string>
@@ -43,8 +45,7 @@ namespace {
 
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
-constexpr UINT_PTR kRuntimeTimerId = 1;
-constexpr UINT kRuntimeRefreshIntervalMs = 250;
+constexpr UINT kStateChangedMessage = WM_APP + 2;
 
 }  // namespace
 
@@ -58,7 +59,7 @@ public:
     BEGIN_MSG_MAP(MainWindow)
         MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
-        MESSAGE_HANDLER(WM_TIMER, OnTimer)
+        MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
@@ -75,9 +76,11 @@ private:
         if (!m_ruleManager.Load()) {
             m_logger.Error(L"加载规则失败：" + m_ruleManager.LastError());
             ShowError(L"加载配置失败", m_ruleManager.LastError());
-        } else {
-            m_logger.Info(L"加载规则：" + std::to_wstring(m_ruleManager.Rules().size()) + L" 条");
+            m_initializationFailed = true;
+            ::PostMessageW(m_hWnd, WM_CLOSE, 0, 0);
+            return TRUE;
         }
+        m_logger.Info(L"加载规则：" + std::to_wstring(m_ruleManager.Rules().size()) + L" 条");
 
         ::CheckDlgButton(m_hWnd, IDC_AUTOSTART,
                          m_ruleManager.AutoStart() ? BST_CHECKED : BST_UNCHECKED);
@@ -89,11 +92,11 @@ private:
             }
         }
 
+        m_blockerService.SetStateChangedCallback([this] { QueueStateRefresh(); });
         if (!m_blockerService.Start(m_ruleManager.Rules())) {
             m_logger.Error(L"进程监控启动失败");
             ShowError(L"启动进程监控失败", L"无法创建进程监控线程");
         }
-        SetTimer(kRuntimeTimerId, kRuntimeRefreshIntervalMs, nullptr);
         RefreshListView(true);
 
         m_trayIconAdded = AddTrayIcon();
@@ -119,10 +122,14 @@ private:
         return 0;
     }
 
-    LRESULT OnTimer(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
+    LRESULT OnStateChanged(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
-        if (wParam == kRuntimeTimerId) {
+        for (;;) {
+            m_stateNotificationPosted.store(false, std::memory_order_release);
             RefreshListView(false);
+            if (!m_stateNotificationPosted.load(std::memory_order_acquire)) {
+                break;
+            }
         }
         return 0;
     }
@@ -168,13 +175,17 @@ private:
 
     LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
+        if (m_initializationFailed) {
+            DestroyWindow();
+            return 0;
+        }
         ::ShowWindow(m_hWnd, SW_HIDE);
         return 0;
     }
 
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
-        KillTimer(kRuntimeTimerId);
+        m_blockerService.SetStateChangedCallback({});
         m_blockerService.Stop();
         RemoveTrayIcon();
         m_logger.Info(L"程序退出");
@@ -212,6 +223,18 @@ private:
         }
         ::ShowWindow(m_hWnd, SW_SHOWNORMAL);
         ::SetForegroundWindow(m_hWnd);
+        RefreshListView(true);
+    }
+
+    void QueueStateRefresh() {
+        if (m_hWnd == nullptr) {
+            return;
+        }
+        if (!m_stateNotificationPosted.exchange(true, std::memory_order_acq_rel)) {
+            if (!::PostMessageW(m_hWnd, kStateChangedMessage, 0, 0)) {
+                m_stateNotificationPosted.store(false, std::memory_order_release);
+            }
+        }
     }
 
     void ShowTrayMenu() {
@@ -273,24 +296,22 @@ private:
             selectedPath = m_renderedStates[static_cast<std::size_t>(selectedIndex)].rule.path;
         }
 
-        ListView_DeleteAllItems(m_listView);
-        for (std::size_t index = 0; index < states.size(); ++index) {
-            const RuntimeRuleState& state = states[index];
-            const std::wstring name = std::filesystem::path(state.rule.path).filename().wstring();
-            LVITEMW item{};
-            item.mask = LVIF_TEXT;
-            item.iItem = static_cast<int>(index);
-            item.pszText = const_cast<LPWSTR>(name.c_str());
-            SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-            SetListItemText(static_cast<int>(index), 1,
-                            const_cast<LPWSTR>(state.rule.path.c_str()));
-            SetListItemText(static_cast<int>(index), 2,
-                            const_cast<LPWSTR>(state.rule.enabled ? L"是" : L"否"));
-            SetListItemText(static_cast<int>(index), 3,
-                            const_cast<LPWSTR>(AppStatusText(state.status)));
-            SetListItemText(static_cast<int>(index), 4,
-                            const_cast<LPWSTR>(state.detail.c_str()));
+        SendMessageW(m_listView, WM_SETREDRAW, FALSE, 0);
+        const std::size_t commonCount =
+            states.size() < m_renderedStates.size() ? states.size() : m_renderedStates.size();
+        for (std::size_t index = 0; index < commonCount; ++index) {
+            if (!SameState(states[index], m_renderedStates[index])) {
+                UpdateListItem(static_cast<int>(index), states[index]);
+            }
         }
+        for (std::size_t index = m_renderedStates.size(); index > states.size(); --index) {
+            ListView_DeleteItem(m_listView, static_cast<int>(index - 1));
+        }
+        for (std::size_t index = commonCount; index < states.size(); ++index) {
+            InsertListItem(static_cast<int>(index), states[index]);
+        }
+        SendMessageW(m_listView, WM_SETREDRAW, TRUE, 0);
+        ::InvalidateRect(m_listView, nullptr, TRUE);
 
         if (!selectedPath.empty()) {
             for (std::size_t index = 0; index < states.size(); ++index) {
@@ -314,14 +335,39 @@ private:
             return false;
         }
         for (std::size_t index = 0; index < left.size(); ++index) {
-            if (!PathUtils::SamePath(left[index].rule.path, right[index].rule.path) ||
-                left[index].rule.enabled != right[index].rule.enabled ||
-                left[index].status != right[index].status ||
-                left[index].detail != right[index].detail) {
+            if (!SameState(left[index], right[index])) {
                 return false;
             }
         }
         return true;
+    }
+
+    static bool SameState(const RuntimeRuleState& left, const RuntimeRuleState& right) {
+        return PathUtils::SamePath(left.rule.path, right.rule.path) &&
+               left.rule.enabled == right.rule.enabled && left.status == right.status &&
+               left.detail == right.detail;
+    }
+
+    void InsertListItem(int itemIndex, const RuntimeRuleState& state) const {
+        const std::wstring name = std::filesystem::path(state.rule.path).filename().wstring();
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = itemIndex;
+        item.pszText = const_cast<LPWSTR>(name.c_str());
+        SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
+        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(state.rule.path.c_str()));
+        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(state.rule.enabled ? L"是" : L"否"));
+        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(AppStatusText(state.status)));
+        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(state.detail.c_str()));
+    }
+
+    void UpdateListItem(int itemIndex, const RuntimeRuleState& state) const {
+        const std::wstring name = std::filesystem::path(state.rule.path).filename().wstring();
+        SetListItemText(itemIndex, 0, const_cast<LPWSTR>(name.c_str()));
+        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(state.rule.path.c_str()));
+        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(state.rule.enabled ? L"是" : L"否"));
+        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(AppStatusText(state.status)));
+        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(state.detail.c_str()));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
@@ -467,6 +513,7 @@ private:
     }
 
     bool m_startHidden = false;
+    bool m_initializationFailed = false;
     bool m_trayIconAdded = false;
     HWND m_listView = nullptr;
     Logger m_logger;
@@ -474,6 +521,7 @@ private:
     StartupManager m_startupManager;
     BlockerService m_blockerService;
     std::vector<RuntimeRuleState> m_renderedStates;
+    std::atomic_bool m_stateNotificationPosted = false;
 };
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
@@ -488,6 +536,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         return static_cast<int>(result);
     }
 
+    HANDLE instanceMutex = CreateMutexW(nullptr, TRUE, L"Local\\HotkeyBlocker.SingleInstance");
+    if (instanceMutex == nullptr) {
+        _Module.Term();
+        CoUninitialize();
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(instanceMutex);
+        _Module.Term();
+        CoUninitialize();
+        return 0;
+    }
+
     AtlInitCommonControls(ICC_WIN95_CLASSES | ICC_LISTVIEW_CLASSES);
     CMessageLoop messageLoop;
     _Module.AddMessageLoop(&messageLoop);
@@ -496,6 +557,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
                              wcsstr(commandLine, L"--background") != nullptr;
     MainWindow window(startHidden);
     if (window.Create(nullptr) == nullptr) {
+        CloseHandle(instanceMutex);
         _Module.RemoveMessageLoop();
         _Module.Term();
         CoUninitialize();
@@ -504,6 +566,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     window.ShowWindow(startHidden ? SW_HIDE : SW_SHOWNORMAL);
 
     const int exitCode = messageLoop.Run();
+    CloseHandle(instanceMutex);
     _Module.RemoveMessageLoop();
     _Module.Term();
     CoUninitialize();

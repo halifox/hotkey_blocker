@@ -475,6 +475,10 @@ bool ConfigStore::Save(const AppConfig& config, std::wstring& error) const {
     if (!WideToUtf8(text, bytes, error)) {
         return false;
     }
+    if (bytes.size() > kMaxConfigBytes) {
+        error = L"配置内容超过 16 MiB 限制";
+        return false;
+    }
 
     const std::filesystem::path parent = m_path.parent_path();
     std::error_code fileSystemError;
