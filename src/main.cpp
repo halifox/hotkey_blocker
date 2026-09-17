@@ -86,6 +86,7 @@ private:
         std::wstring enabled;
         std::wstring status;
         std::wstring detail;
+        int imageIndex = -1;
         bool isRule = false;
     };
 
@@ -357,6 +358,14 @@ private:
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
                             LVS_EX_LABELTIP);
+        SHFILEINFOW shellFileInfo{};
+        const DWORD_PTR systemImageList = SHGetFileInfoW(
+            L"C:\\Windows", FILE_ATTRIBUTE_DIRECTORY, &shellFileInfo, sizeof(shellFileInfo),
+            SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+        if (systemImageList != 0) {
+            m_systemImageList = reinterpret_cast<HIMAGELIST>(systemImageList);
+            ListView_SetImageList(m_listView, m_systemImageList, LVSIL_SMALL);
+        }
         InsertColumn(0, L"应用", 170);
         InsertColumn(1, L"完整路径", 360);
         InsertColumn(2, L"来源", 70);
@@ -449,6 +458,7 @@ private:
             row.enabled = state.rule.enabled ? L"是" : L"否";
             row.status = IsActionableStatus(state.status) ? AppStatusText(state.status) : L"";
             row.detail = state.detail;
+            row.imageIndex = FileIconIndex(state.rule.path);
             if (state.rule.targets.size() > 1) {
                 if (!row.detail.empty()) {
                     row.detail += L"；";
@@ -472,6 +482,7 @@ private:
             row.source = AppSourceText(application.source);
             row.enabled = L"—";
             row.status.clear();
+            row.imageIndex = FileIconIndex(application.path);
             row.detail = application.publisher;
             if (!application.version.empty()) {
                 if (!row.detail.empty()) {
@@ -499,6 +510,7 @@ private:
                 left[index].enabled != right[index].enabled ||
                 left[index].status != right[index].status ||
                 left[index].detail != right[index].detail ||
+                left[index].imageIndex != right[index].imageIndex ||
                 left[index].isRule != right[index].isRule) {
                 return false;
             }
@@ -508,8 +520,9 @@ private:
 
     void InsertListItem(int itemIndex, const DisplayRow& row) const {
         LVITEMW item{};
-        item.mask = LVIF_TEXT;
+        item.mask = LVIF_TEXT | LVIF_IMAGE;
         item.iItem = itemIndex;
+        item.iImage = row.imageIndex;
         item.pszText = const_cast<LPWSTR>(row.name.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
         SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.path.c_str()));
@@ -524,6 +537,31 @@ private:
         item.pszText = text;
         SendMessageW(m_listView, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex),
                      reinterpret_cast<LPARAM>(&item));
+    }
+
+    int FileIconIndex(const std::wstring& path) const {
+        const auto cached = m_iconIndices.find(path);
+        if (cached != m_iconIndices.end()) {
+            return cached->second;
+        }
+        if (m_systemImageList == nullptr || path.empty()) {
+            return -1;
+        }
+
+        SHFILEINFOW shellFileInfo{};
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        UINT flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            attributes = FILE_ATTRIBUTE_NORMAL;
+            flags |= SHGFI_USEFILEATTRIBUTES;
+        }
+        if (SHGetFileInfoW(path.c_str(), attributes, &shellFileInfo, sizeof(shellFileInfo), flags) ==
+            0) {
+            m_iconIndices.emplace(path, -1);
+            return -1;
+        }
+        m_iconIndices.emplace(path, shellFileInfo.iIcon);
+        return shellFileInfo.iIcon;
     }
 
     int SelectedIndex() const {
@@ -757,10 +795,9 @@ private:
 
     static std::wstring DiscoverySummary(const DiscoveryStats& stats) {
         std::wstring result = L"发现 " + std::to_wstring(stats.applications) + L" 个可用程序";
-        const std::size_t sourceEntries = stats.appsFolderEntries + stats.startMenuShortcuts +
-                                           stats.appPathsEntries + stats.uninstallEntries;
-        if (sourceEntries != 0) {
-            result += L"，检查 " + std::to_wstring(sourceEntries) + L" 个系统条目";
+        if (stats.fixedExecutableEntries != 0) {
+            result += L"，检查 " + std::to_wstring(stats.fixedExecutableEntries) +
+                      L" 个固定目录程序文件";
         }
         if (stats.unresolvedEntries != 0) {
             result += L"，跳过 " + std::to_wstring(stats.unresolvedEntries) +
@@ -768,7 +805,7 @@ private:
         }
         if (stats.filteredEntries != 0) {
             result += L"，过滤 " + std::to_wstring(stats.filteredEntries) +
-                      L" 个系统组件或更新项";
+                      L" 个系统组件、更新项、辅助程序或低信息文件";
         }
         return result;
     }
@@ -848,6 +885,7 @@ private:
     bool m_initializationFailed = false;
     bool m_trayIconAdded = false;
     HWND m_listView = nullptr;
+    HIMAGELIST m_systemImageList = nullptr;
     Logger m_logger;
     RuleManager m_ruleManager;
     StartupManager m_startupManager;
@@ -855,6 +893,7 @@ private:
     std::vector<DisplayRow> m_renderedRows;
     std::vector<DiscoveredApplication> m_discoveredApps;
     DiscoveryStats m_discoveryStats;
+    mutable std::unordered_map<std::wstring, int> m_iconIndices;
     std::unordered_map<std::wstring, AppStatus> m_notifiedActionableStates;
     std::atomic_bool m_stateNotificationPosted = false;
     std::atomic_bool m_discoveryRunning = false;
