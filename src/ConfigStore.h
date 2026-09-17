@@ -11,8 +11,6 @@ enum class AppSource {
     Portable = 2,
 };
 
-const wchar_t* AppSourceText(AppSource source);
-
 struct AppRule {
     AppRule() = default;
     AppRule(std::wstring rulePath, bool ruleEnabled = true)

@@ -412,18 +412,6 @@ std::wstring SerializeIni(const AppConfig& config) {
 
 }  // namespace
 
-const wchar_t* AppSourceText(AppSource source) {
-    switch (source) {
-        case AppSource::Installed:
-            return L"已安装";
-        case AppSource::Portable:
-            return L"便携式";
-        case AppSource::Manual:
-        default:
-            return L"手动";
-    }
-}
-
 ConfigStore::ConfigStore() : m_path(DefaultPath()) {}
 
 ConfigStore::ConfigStore(std::filesystem::path path) : m_path(std::move(path)) {}

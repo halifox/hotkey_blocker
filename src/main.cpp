@@ -73,7 +73,6 @@ private:
         std::wstring key;
         std::wstring name;
         std::wstring path;
-        std::wstring source;
         std::wstring enabled;
         std::wstring status;
         std::wstring detail;
@@ -312,9 +311,8 @@ private:
         }
         InsertColumn(0, L"应用", 170);
         InsertColumn(1, L"完整路径", 360);
-        InsertColumn(2, L"来源", 70);
-        InsertColumn(3, L"启用", 55);
-        InsertColumn(4, L"状态", 89);
+        InsertColumn(2, L"启用", 55);
+        InsertColumn(3, L"状态", 89);
     }
 
     void InsertColumn(int index, const wchar_t* title, int width) {
@@ -384,7 +382,6 @@ private:
             row.key = state.rule.path;
             row.name = displayNameForRule(state.rule);
             row.path = state.rule.path;
-            row.source = AppSourceText(state.rule.source);
             row.enabled = state.rule.enabled ? L"是" : L"否";
             row.status = IsActionableStatus(state.status) ? AppStatusText(state.status) : L"";
             row.detail = state.detail;
@@ -415,7 +412,6 @@ private:
         for (std::size_t index = 0; index < left.size(); ++index) {
             if (left[index].key != right[index].key || left[index].name != right[index].name ||
                 left[index].path != right[index].path ||
-                left[index].source != right[index].source ||
                 left[index].enabled != right[index].enabled ||
                 left[index].status != right[index].status ||
                 left[index].detail != right[index].detail ||
@@ -435,9 +431,8 @@ private:
         item.pszText = const_cast<LPWSTR>(row.name.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
         SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.path.c_str()));
-        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.source.c_str()));
-        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(row.enabled.c_str()));
-        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(row.status.c_str()));
+        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.enabled.c_str()));
+        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(row.status.c_str()));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
