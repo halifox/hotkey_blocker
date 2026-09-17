@@ -71,7 +71,6 @@ public:
 private:
     struct DisplayRow {
         std::wstring key;
-        std::wstring name;
         std::wstring path;
         std::wstring enabled;
         std::wstring status;
@@ -298,6 +297,8 @@ private:
         if (m_listView == nullptr) {
             return;
         }
+        const LONG_PTR listViewStyle = ::GetWindowLongPtrW(m_listView, GWL_STYLE);
+        ::SetWindowLongPtrW(m_listView, GWL_STYLE, listViewStyle | LVS_NOSCROLL);
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
                             LVS_EX_LABELTIP);
@@ -309,16 +310,29 @@ private:
             m_systemImageList = reinterpret_cast<HIMAGELIST>(systemImageList);
             ListView_SetImageList(m_listView, m_systemImageList, LVSIL_SMALL);
         }
-        InsertColumn(0, L"应用", 170);
-        InsertColumn(1, L"完整路径", 360);
-        InsertColumn(2, L"启用", 55);
-        InsertColumn(3, L"状态", 89);
+        constexpr int kEnabledColumnWidth = 55;
+        constexpr int kStatusColumnWidth = 89;
+        RECT listClientRect{};
+        ::GetClientRect(m_listView, &listClientRect);
+        const int listWidth = listClientRect.right - listClientRect.left;
+        const int remainingWidth = listWidth - kEnabledColumnWidth - kStatusColumnWidth;
+        const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
+        InsertColumn(0, L"目标路径", pathColumnWidth, LVCFMT_LEFT);
+        InsertColumn(1, L"启用", kEnabledColumnWidth, LVCFMT_RIGHT);
+        InsertColumn(2, L"状态", kStatusColumnWidth, LVCFMT_RIGHT);
+
+        const HWND header = ListView_GetHeader(m_listView);
+        if (header != nullptr) {
+            const LONG_PTR headerStyle = ::GetWindowLongPtrW(header, GWL_STYLE);
+            ::SetWindowLongPtrW(header, GWL_STYLE, headerStyle | HDS_NOSIZING);
+        }
     }
 
-    void InsertColumn(int index, const wchar_t* title, int width) {
+    void InsertColumn(int index, const wchar_t* title, int width, int format) {
         LVCOLUMNW column{};
-        column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         column.cx = width;
+        column.fmt = format;
         column.iSubItem = index;
         column.pszText = const_cast<LPWSTR>(title);
         SendMessageW(m_listView, LVM_INSERTCOLUMNW, static_cast<WPARAM>(index),
@@ -370,17 +384,9 @@ private:
         std::vector<DisplayRow> rows;
         rows.reserve(states.size());
 
-        const auto displayNameForRule = [](const AppRule& rule) {
-            if (!rule.displayName.empty()) {
-                return rule.displayName;
-            }
-            return std::filesystem::path(rule.path).stem().wstring();
-        };
-
         for (const RuntimeRuleState& state : states) {
             DisplayRow row;
             row.key = state.rule.path;
-            row.name = displayNameForRule(state.rule);
             row.path = state.rule.path;
             row.enabled = state.rule.enabled ? L"是" : L"否";
             row.status = IsActionableStatus(state.status) ? AppStatusText(state.status) : L"";
@@ -410,8 +416,7 @@ private:
             return false;
         }
         for (std::size_t index = 0; index < left.size(); ++index) {
-            if (left[index].key != right[index].key || left[index].name != right[index].name ||
-                left[index].path != right[index].path ||
+            if (left[index].key != right[index].key || left[index].path != right[index].path ||
                 left[index].enabled != right[index].enabled ||
                 left[index].status != right[index].status ||
                 left[index].detail != right[index].detail ||
@@ -428,11 +433,10 @@ private:
         item.mask = LVIF_TEXT | LVIF_IMAGE;
         item.iItem = itemIndex;
         item.iImage = row.imageIndex;
-        item.pszText = const_cast<LPWSTR>(row.name.c_str());
+        item.pszText = const_cast<LPWSTR>(row.path.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.path.c_str()));
-        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.enabled.c_str()));
-        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(row.status.c_str()));
+        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.enabled.c_str()));
+        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.status.c_str()));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
@@ -783,6 +787,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         CoUninitialize();
         return 1;
     }
+    window.CenterWindow();
     window.ShowWindow(startHidden ? SW_HIDE : SW_SHOWNORMAL);
 
     const int exitCode = messageLoop.Run();
