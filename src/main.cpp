@@ -318,8 +318,8 @@ private:
         const int remainingWidth = listWidth - kEnabledColumnWidth - kStatusColumnWidth;
         const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
         InsertColumn(0, L"目标路径", pathColumnWidth, LVCFMT_LEFT);
-        InsertColumn(1, L"启用", kEnabledColumnWidth, LVCFMT_RIGHT);
-        InsertColumn(2, L"状态", kStatusColumnWidth, LVCFMT_RIGHT);
+        InsertColumn(1, L"启用", kEnabledColumnWidth, LVCFMT_CENTER);
+        InsertColumn(2, L"状态", kStatusColumnWidth, LVCFMT_CENTER);
 
         const HWND header = ListView_GetHeader(m_listView);
         if (header != nullptr) {
