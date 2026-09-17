@@ -548,6 +548,7 @@ private:
 
         AppRule rule;
         rule.path = std::move(path);
+        rule.enabled = true;
         rule.source = AppSource::Manual;
         if (!m_ruleManager.AddRule(std::move(rule))) {
             ShowError(L"添加应用失败", m_ruleManager.LastError());
@@ -569,6 +570,7 @@ private:
         if (rule.displayName.empty()) {
             rule.displayName = rule.path;
         }
+        rule.enabled = true;
         rule.source = AppSource::Manual;
         rule.recursive = true;
         if (!m_ruleManager.AddRule(std::move(rule))) {
