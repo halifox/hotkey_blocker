@@ -1,0 +1,23 @@
+#pragma code_page(65001)
+
+#include <winresrc.h>
+#include "resource.h"
+
+IDD_MAIN_WINDOW DIALOGEX 0, 0, 260, 100
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "Hello WTL"
+FONT 10, "Segoe UI"
+BEGIN
+    LTEXT           "hello", IDC_HELLO_TEXT, 20, 35, 220, 20, SS_CENTER
+END
+
+IDR_TRAY_MENU MENU
+BEGIN
+    POPUP "Tray"
+    BEGIN
+        MENUITEM "显示窗口", ID_TRAY_SHOW
+        MENUITEM SEPARATOR
+        MENUITEM "退出", ID_TRAY_EXIT
+    END
+END
