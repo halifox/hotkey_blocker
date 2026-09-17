@@ -274,7 +274,7 @@ bool ProcessMonitor::QueryProcessInfo(DWORD pid, ProcessInfo& process) {
     ULARGE_INTEGER creationValue{};
     creationValue.LowPart = creation.dwLowDateTime;
     creationValue.HighPart = creation.dwHighDateTime;
-    process = {pid, std::move(imagePath), creationValue.QuadPart};
+    process = {pid, 0, std::move(imagePath), creationValue.QuadPart};
     return true;
 }
 
@@ -310,6 +310,7 @@ ProcessMonitor::ProcessMap ProcessMonitor::Enumerate(const ProcessMap& previous)
                 }
                 continue;
             }
+            process.parentPid = entry.th32ParentProcessID;
             current.emplace(process.pid, std::move(process));
         } while (Process32NextW(snapshot, &entry));
     }

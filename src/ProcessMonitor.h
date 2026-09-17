@@ -12,6 +12,7 @@
 
 struct ProcessInfo {
     DWORD pid = 0;
+    DWORD parentPid = 0;
     std::wstring imagePath;
     ULONGLONG creationTime = 0;
 };

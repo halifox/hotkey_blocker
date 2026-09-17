@@ -15,9 +15,12 @@
 
 enum class AppStatus {
     Waiting,
+    Injecting,
     RestartRequired,
     Blocked,
+    PartiallyBlocked,
     InjectionFailed,
+    PathMissing,
     Disabled,
 };
 
@@ -43,12 +46,14 @@ public:
     void Stop();
     void UpdateRules(const std::vector<AppRule>& rules);
     std::vector<RuntimeRuleState> Snapshot() const;
+    std::vector<ProcessInfo> RunningProcesses() const;
     bool WaitUntilReady(DWORD timeoutMs) const;
     void SetStateChangedCallback(StateChangedCallback callback);
 
 private:
     enum class ProcessProtection {
         Observed,
+        Pending,
         Blocked,
         Failed,
     };
@@ -74,6 +79,7 @@ private:
     void RebuildStatesLocked();
     void RebuildRuleIndexLocked();
     int FindRuleIndexLocked(const std::wstring& path) const;
+    static int FindRuleIndex(const std::vector<AppRule>& rules, const std::wstring& path);
     void NotifyStateChanged() const;
     static bool SameProcess(const TrackedProcess& tracked, const ProcessInfo& process);
     static AppStatus StateForRule(const AppRule& rule,

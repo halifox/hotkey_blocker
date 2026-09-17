@@ -15,6 +15,7 @@ public:
     bool Save();
 
     bool Add(const std::wstring& path);
+    bool AddRule(AppRule rule);
     bool Remove(const std::wstring& path);
     bool SetEnabled(const std::wstring& path, bool enabled);
     bool AutoStart() const noexcept;

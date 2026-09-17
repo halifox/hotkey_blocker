@@ -4,7 +4,36 @@
 #include "PathUtils.h"
 
 #include <algorithm>
+#include <windows.h>
 #include <utility>
+
+namespace {
+
+template <typename Callback>
+void ForEachRuleTarget(const AppRule& rule, Callback callback) {
+    bool hasPrimary = false;
+    if (!rule.path.empty()) {
+        callback(rule.path);
+        hasPrimary = true;
+    }
+    for (const std::wstring& target : rule.targets) {
+        if (!target.empty() && (!hasPrimary || !PathUtils::SamePath(target, rule.path))) {
+            callback(target);
+        }
+    }
+}
+
+bool AnyRuleTargetExists(const AppRule& rule) {
+    bool exists = false;
+    ForEachRuleTarget(rule, [&exists](const std::wstring& target) {
+        if (GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            exists = true;
+        }
+    });
+    return exists;
+}
+
+}  // namespace
 
 BlockerService::BlockerService(Logger* logger) : m_logger(logger) {}
 
@@ -103,7 +132,7 @@ void BlockerService::UpdateRules(const std::vector<AppRule>& rules) {
         }
 
         for (const ProcessInfo& process : runningProcesses) {
-            const int ruleIndex = PathUtils::FindRuleIndex(rules, process.imagePath);
+            const int ruleIndex = FindRuleIndex(rules, process.imagePath);
             if (ruleIndex < 0) {
                 continue;
             }
@@ -130,6 +159,10 @@ void BlockerService::UpdateRules(const std::vector<AppRule>& rules) {
 std::vector<RuntimeRuleState> BlockerService::Snapshot() const {
     std::lock_guard lock(m_mutex);
     return m_states;
+}
+
+std::vector<ProcessInfo> BlockerService::RunningProcesses() const {
+    return m_monitor.Snapshot();
 }
 
 bool BlockerService::WaitUntilReady(DWORD timeoutMs) const {
@@ -191,7 +224,8 @@ void BlockerService::OnProcessEvent(const ProcessEvent& event) {
             return;
         }
         tracked.push_back({event.process.pid, event.process.creationTime,
-                           ProcessProtection::Observed,
+                           event.initialScan ? ProcessProtection::Observed
+                                              : ProcessProtection::Pending,
                            event.initialScan ? L"目标进程已经运行，请重启应用" : L""});
         RebuildStatesLocked();
         shouldInject = rule.enabled && !event.initialScan;
@@ -296,7 +330,9 @@ void BlockerService::RebuildStatesLocked() {
 void BlockerService::RebuildRuleIndexLocked() {
     m_ruleIndices.clear();
     for (std::size_t index = 0; index < m_rules.size(); ++index) {
-        m_ruleIndices.emplace(m_rules[index].path, index);
+        ForEachRuleTarget(m_rules[index], [this, index](const std::wstring& target) {
+            m_ruleIndices.emplace(target, index);
+        });
     }
 }
 
@@ -330,17 +366,40 @@ AppStatus BlockerService::StateForRule(
         return AppStatus::Disabled;
     }
 
-    if (std::any_of(processes.begin(), processes.end(), [](const TrackedProcess& process) {
+    if (processes.empty()) {
+        return AnyRuleTargetExists(rule) ? AppStatus::Waiting : AppStatus::PathMissing;
+    }
+
+    const std::size_t blockedCount = static_cast<std::size_t>(std::count_if(
+        processes.begin(), processes.end(), [](const TrackedProcess& process) {
             return process.protection == ProcessProtection::Blocked;
-        })) {
+        }));
+    const bool hasPending = std::any_of(
+        processes.begin(), processes.end(), [](const TrackedProcess& process) {
+            return process.protection == ProcessProtection::Pending;
+        });
+    const bool hasObserved = std::any_of(
+        processes.begin(), processes.end(), [](const TrackedProcess& process) {
+            return process.protection == ProcessProtection::Observed;
+        });
+    const bool hasFailed = std::any_of(
+        processes.begin(), processes.end(), [](const TrackedProcess& process) {
+            return process.protection == ProcessProtection::Failed;
+        });
+
+    if (blockedCount == processes.size()) {
         return AppStatus::Blocked;
     }
-    if (std::any_of(processes.begin(), processes.end(), [](const TrackedProcess& process) {
-            return process.protection == ProcessProtection::Failed;
-        })) {
+    if (blockedCount > 0) {
+        return AppStatus::PartiallyBlocked;
+    }
+    if (hasFailed) {
         return AppStatus::InjectionFailed;
     }
-    if (!processes.empty()) {
+    if (hasPending) {
+        return AppStatus::Injecting;
+    }
+    if (hasObserved) {
         return AppStatus::RestartRequired;
     }
     return AppStatus::Waiting;
@@ -351,8 +410,14 @@ std::wstring BlockerService::DetailForRule(
     if (status == AppStatus::Disabled) {
         return processes.empty() ? std::wstring{} : L"已停用；已运行进程需重启后解除拦截";
     }
+    if (status == AppStatus::PathMissing) {
+        return L"目标程序路径不存在，请重新定位或删除规则";
+    }
+    if (status == AppStatus::Injecting) {
+        return L"正在处理 " + std::to_wstring(processes.size()) + L" 个运行进程";
+    }
     if (status == AppStatus::RestartRequired) {
-        return L"目标进程已在运行，请重启应用";
+        return L"有 " + std::to_wstring(processes.size()) + L" 个进程已在运行，请重启应用";
     }
     if (status == AppStatus::InjectionFailed) {
         const auto failed = std::find_if(
@@ -374,7 +439,35 @@ std::wstring BlockerService::DetailForRule(
         }
         return result;
     }
+    if (status == AppStatus::PartiallyBlocked) {
+        std::size_t blockedCount = 0;
+        std::size_t failedCount = 0;
+        for (const TrackedProcess& process : processes) {
+            blockedCount += process.protection == ProcessProtection::Blocked ? 1u : 0u;
+            failedCount += process.protection == ProcessProtection::Failed ? 1u : 0u;
+        }
+        std::wstring result = L"已拦截 " + std::to_wstring(blockedCount) + L"/" +
+                              std::to_wstring(processes.size()) + L" 个进程";
+        if (failedCount != 0) {
+            result += L"，失败 " + std::to_wstring(failedCount) + L" 个";
+        }
+        return result;
+    }
     return {};
+}
+
+int BlockerService::FindRuleIndex(const std::vector<AppRule>& rules,
+                                  const std::wstring& path) {
+    for (std::size_t index = 0; index < rules.size(); ++index) {
+        bool matched = false;
+        ForEachRuleTarget(rules[index], [&matched, &path](const std::wstring& target) {
+            matched = matched || PathUtils::SamePath(target, path);
+        });
+        if (matched) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
 }
 
 void BlockerService::Log(const std::wstring& message) const {
@@ -387,12 +480,18 @@ const wchar_t* AppStatusText(AppStatus status) {
     switch (status) {
         case AppStatus::Waiting:
             return L"等待启动";
+        case AppStatus::Injecting:
+            return L"正在处理";
         case AppStatus::RestartRequired:
             return L"需要重启";
         case AppStatus::Blocked:
             return L"已拦截";
+        case AppStatus::PartiallyBlocked:
+            return L"部分拦截";
         case AppStatus::InjectionFailed:
             return L"注入失败";
+        case AppStatus::PathMissing:
+            return L"路径不存在";
         case AppStatus::Disabled:
             return L"已停用";
         default:

@@ -27,6 +27,7 @@ if (MSVC)
 endif ()
 
 add_executable(hkb WIN32
+        src/ApplicationDiscovery.cpp
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
         src/ConfigStore.cpp

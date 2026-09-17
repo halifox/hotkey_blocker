@@ -48,7 +48,7 @@ int wmain() {
     DeleteFileW((configPath.wstring() + L".tmp").c_str());
 
     const AppConfig expected{
-        1,
+        2,
         true,
         {{L"C:\\程序\\示例.exe", true}, {L"D:\\工具\\禁用.exe", false}},
     };

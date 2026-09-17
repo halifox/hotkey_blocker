@@ -148,7 +148,8 @@ int wmain() {
     BlockerService service(&logger);
     StateWaiter waiter;
     service.SetStateChangedCallback([&waiter] { waiter.Notify(); });
-    if (!service.Start({{rulePath, true}})) {
+    const std::vector<AppRule> rules = {{rulePath, true}};
+    if (!service.Start(rules)) {
         CloseHandle(ready);
         CloseHandle(release);
         DeleteFileW(outputPath.c_str());

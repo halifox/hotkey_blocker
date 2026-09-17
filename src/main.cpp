@@ -29,9 +29,13 @@
 #include <atomic>
 #include <filesystem>
 #include <iterator>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "ApplicationDiscovery.h"
 #include "BlockerService.h"
 #include "Logger.h"
 #include "PathUtils.h"
@@ -46,6 +50,7 @@ namespace {
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
+constexpr UINT kDiscoveryCompletedMessage = WM_APP + 3;
 
 }  // namespace
 
@@ -56,10 +61,15 @@ public:
     explicit MainWindow(bool startHidden)
         : m_startHidden(startHidden), m_blockerService(&m_logger) {}
 
+    ~MainWindow() {
+        StopDiscoveryScan();
+    }
+
     BEGIN_MSG_MAP(MainWindow)
         MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
         MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
+        MESSAGE_HANDLER(kDiscoveryCompletedMessage, OnDiscoveryCompleted)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
@@ -67,6 +77,22 @@ public:
     END_MSG_MAP()
 
 private:
+    struct DisplayRow {
+        std::wstring key;
+        std::wstring name;
+        std::wstring path;
+        std::wstring source;
+        std::wstring enabled;
+        std::wstring status;
+        std::wstring detail;
+        bool isRule = false;
+    };
+
+    struct DiscoveryResult {
+        std::vector<DiscoveredApplication> applications;
+        std::wstring warning;
+    };
+
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         m_listView = GetDlgItem(IDC_APP_LIST);
@@ -98,6 +124,7 @@ private:
             ShowError(L"启动进程监控失败", L"无法创建进程监控线程");
         }
         RefreshListView(true);
+        StartDiscoveryScan();
 
         m_trayIconAdded = AddTrayIcon();
         if (m_startHidden) {
@@ -134,11 +161,44 @@ private:
         return 0;
     }
 
+    LRESULT OnDiscoveryCompleted(UINT, WPARAM, LPARAM, BOOL& handled) {
+        handled = TRUE;
+        if (m_discoveryThread.joinable()) {
+            m_discoveryThread.join();
+        }
+
+        std::optional<DiscoveryResult> result;
+        {
+            std::lock_guard lock(m_discoveryMutex);
+            result = std::move(m_pendingDiscovery);
+            m_pendingDiscovery.reset();
+        }
+        m_discoveryRunning.store(false, std::memory_order_release);
+        if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
+            ::EnableWindow(refreshButton, TRUE);
+        }
+        if (!result.has_value()) {
+            return 0;
+        }
+        if (!result->warning.empty()) {
+            m_logger.Error(L"应用扫描提示：" + result->warning);
+        }
+        m_discoveredApps = std::move(result->applications);
+        RefreshListView(true);
+        return 0;
+    }
+
     LRESULT OnCommand(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
         handled = TRUE;
         switch (LOWORD(wParam)) {
             case IDC_ADD_APP:
-                AddApplication();
+                AddSelectedApplication();
+                break;
+            case IDC_ADD_PORTABLE:
+                AddPortableApplication();
+                break;
+            case IDC_REFRESH_APPS:
+                StartDiscoveryScan();
                 break;
             case IDC_DELETE_APP:
                 DeleteSelectedApplication();
@@ -166,7 +226,13 @@ private:
         const auto* header = reinterpret_cast<const NMHDR*>(lParam);
         if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
             handled = TRUE;
-            OpenSelectedLocation();
+            const int index = SelectedIndex();
+            if (index >= 0 && index < static_cast<int>(m_renderedRows.size()) &&
+                !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
+                AddSelectedApplication();
+            } else {
+                OpenSelectedLocation();
+            }
             return 0;
         }
         handled = FALSE;
@@ -186,6 +252,7 @@ private:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         m_blockerService.SetStateChangedCallback({});
+        StopDiscoveryScan();
         m_blockerService.Stop();
         RemoveTrayIcon();
         m_logger.Info(L"程序退出");
@@ -262,12 +329,14 @@ private:
             return;
         }
         ListView_SetExtendedListViewStyle(
-            m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
-        InsertColumn(0, L"应用", 150);
-        InsertColumn(1, L"完整路径", 300);
-        InsertColumn(2, L"启用", 50);
-        InsertColumn(3, L"状态", 90);
-        InsertColumn(4, L"详情", 250);
+            m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
+                            LVS_EX_LABELTIP);
+        InsertColumn(0, L"应用", 180);
+        InsertColumn(1, L"完整路径", 390);
+        InsertColumn(2, L"来源", 75);
+        InsertColumn(3, L"启用", 55);
+        InsertColumn(4, L"状态", 95);
+        InsertColumn(5, L"详情", 280);
     }
 
     void InsertColumn(int index, const wchar_t* title, int width) {
@@ -285,37 +354,28 @@ private:
             return;
         }
 
-        const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
-        if (!force && SameStates(states, m_renderedStates)) {
+        const std::vector<DisplayRow> rows = BuildDisplayRows();
+        if (!force && SameRows(rows, m_renderedRows)) {
             return;
         }
 
-        std::wstring selectedPath;
+        std::wstring selectedKey;
         const int selectedIndex = ListView_GetNextItem(m_listView, -1, LVNI_SELECTED);
-        if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedStates.size())) {
-            selectedPath = m_renderedStates[static_cast<std::size_t>(selectedIndex)].rule.path;
+        if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedRows.size())) {
+            selectedKey = m_renderedRows[static_cast<std::size_t>(selectedIndex)].key;
         }
 
         SendMessageW(m_listView, WM_SETREDRAW, FALSE, 0);
-        const std::size_t commonCount =
-            states.size() < m_renderedStates.size() ? states.size() : m_renderedStates.size();
-        for (std::size_t index = 0; index < commonCount; ++index) {
-            if (!SameState(states[index], m_renderedStates[index])) {
-                UpdateListItem(static_cast<int>(index), states[index]);
-            }
-        }
-        for (std::size_t index = m_renderedStates.size(); index > states.size(); --index) {
-            ListView_DeleteItem(m_listView, static_cast<int>(index - 1));
-        }
-        for (std::size_t index = commonCount; index < states.size(); ++index) {
-            InsertListItem(static_cast<int>(index), states[index]);
+        ListView_DeleteAllItems(m_listView);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            InsertListItem(static_cast<int>(index), rows[index]);
         }
         SendMessageW(m_listView, WM_SETREDRAW, TRUE, 0);
         ::InvalidateRect(m_listView, nullptr, TRUE);
 
-        if (!selectedPath.empty()) {
-            for (std::size_t index = 0; index < states.size(); ++index) {
-                if (!PathUtils::SamePath(selectedPath, states[index].rule.path)) {
+        if (!selectedKey.empty()) {
+            for (std::size_t index = 0; index < rows.size(); ++index) {
+                if (rows[index].key != selectedKey) {
                     continue;
                 }
                 LVITEMW item{};
@@ -326,48 +386,112 @@ private:
                 break;
             }
         }
-        m_renderedStates = states;
+        m_renderedRows = rows;
     }
 
-    static bool SameStates(const std::vector<RuntimeRuleState>& left,
-                           const std::vector<RuntimeRuleState>& right) {
+    std::vector<DisplayRow> BuildDisplayRows() const {
+        const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
+        std::vector<DisplayRow> rows;
+        rows.reserve(states.size() + m_discoveredApps.size());
+
+        const auto displayNameForRule = [](const AppRule& rule) {
+            if (!rule.displayName.empty()) {
+                return rule.displayName;
+            }
+            return std::filesystem::path(rule.path).stem().wstring();
+        };
+
+        const auto hasRuleTarget = [&states](const std::wstring& path) {
+            for (const RuntimeRuleState& state : states) {
+                if (PathUtils::SamePath(state.rule.path, path)) {
+                    return true;
+                }
+                for (const std::wstring& target : state.rule.targets) {
+                    if (PathUtils::SamePath(target, path)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        for (const RuntimeRuleState& state : states) {
+            DisplayRow row;
+            row.key = state.rule.path;
+            row.name = displayNameForRule(state.rule);
+            row.path = state.rule.path;
+            row.source = AppSourceText(state.rule.source);
+            row.enabled = state.rule.enabled ? L"是" : L"否";
+            row.status = AppStatusText(state.status);
+            row.detail = state.detail;
+            if (state.rule.targets.size() > 1) {
+                if (!row.detail.empty()) {
+                    row.detail += L"；";
+                }
+                row.detail += L"目标进程 " + std::to_wstring(state.rule.targets.size()) + L" 个";
+            }
+            row.isRule = true;
+            rows.push_back(std::move(row));
+        }
+
+        for (const DiscoveredApplication& application : m_discoveredApps) {
+            if (hasRuleTarget(application.path)) {
+                continue;
+            }
+            DisplayRow row;
+            row.key = application.path;
+            row.name = application.displayName.empty()
+                           ? std::filesystem::path(application.path).stem().wstring()
+                           : application.displayName;
+            row.path = application.path;
+            row.source = AppSourceText(application.source);
+            row.enabled = L"否";
+            row.status = L"未添加";
+            row.detail = application.publisher;
+            if (!application.version.empty()) {
+                if (!row.detail.empty()) {
+                    row.detail += L"；";
+                }
+                row.detail += L"版本 " + application.version;
+            }
+            if (row.detail.empty()) {
+                row.detail = L"选择后加入拦截规则";
+            }
+            rows.push_back(std::move(row));
+        }
+        return rows;
+    }
+
+    static bool SameRows(const std::vector<DisplayRow>& left,
+                         const std::vector<DisplayRow>& right) {
         if (left.size() != right.size()) {
             return false;
         }
         for (std::size_t index = 0; index < left.size(); ++index) {
-            if (!SameState(left[index], right[index])) {
+            if (left[index].key != right[index].key || left[index].name != right[index].name ||
+                left[index].path != right[index].path ||
+                left[index].source != right[index].source ||
+                left[index].enabled != right[index].enabled ||
+                left[index].status != right[index].status ||
+                left[index].detail != right[index].detail ||
+                left[index].isRule != right[index].isRule) {
                 return false;
             }
         }
         return true;
     }
 
-    static bool SameState(const RuntimeRuleState& left, const RuntimeRuleState& right) {
-        return PathUtils::SamePath(left.rule.path, right.rule.path) &&
-               left.rule.enabled == right.rule.enabled && left.status == right.status &&
-               left.detail == right.detail;
-    }
-
-    void InsertListItem(int itemIndex, const RuntimeRuleState& state) const {
-        const std::wstring name = std::filesystem::path(state.rule.path).filename().wstring();
+    void InsertListItem(int itemIndex, const DisplayRow& row) const {
         LVITEMW item{};
         item.mask = LVIF_TEXT;
         item.iItem = itemIndex;
-        item.pszText = const_cast<LPWSTR>(name.c_str());
+        item.pszText = const_cast<LPWSTR>(row.name.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(state.rule.path.c_str()));
-        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(state.rule.enabled ? L"是" : L"否"));
-        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(AppStatusText(state.status)));
-        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(state.detail.c_str()));
-    }
-
-    void UpdateListItem(int itemIndex, const RuntimeRuleState& state) const {
-        const std::wstring name = std::filesystem::path(state.rule.path).filename().wstring();
-        SetListItemText(itemIndex, 0, const_cast<LPWSTR>(name.c_str()));
-        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(state.rule.path.c_str()));
-        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(state.rule.enabled ? L"是" : L"否"));
-        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(AppStatusText(state.status)));
-        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(state.detail.c_str()));
+        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.path.c_str()));
+        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.source.c_str()));
+        SetListItemText(itemIndex, 3, const_cast<LPWSTR>(row.enabled.c_str()));
+        SetListItemText(itemIndex, 4, const_cast<LPWSTR>(row.status.c_str()));
+        SetListItemText(itemIndex, 5, const_cast<LPWSTR>(row.detail.c_str()));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
@@ -385,7 +509,52 @@ private:
         return ListView_GetNextItem(m_listView, -1, LVNI_SELECTED);
     }
 
-    void AddApplication() {
+    std::vector<int> SelectedIndices() const {
+        std::vector<int> indices;
+        if (m_listView == nullptr) {
+            return indices;
+        }
+        for (int index = -1;;) {
+            index = ListView_GetNextItem(m_listView, index, LVNI_SELECTED);
+            if (index < 0) {
+                break;
+            }
+            indices.push_back(index);
+        }
+        return indices;
+    }
+
+    void AddSelectedApplication() {
+        const std::vector<int> selected = SelectedIndices();
+        std::vector<const DisplayRow*> candidates;
+        for (const int index : selected) {
+            if (index >= 0 && index < static_cast<int>(m_renderedRows.size()) &&
+                !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
+                candidates.push_back(&m_renderedRows[static_cast<std::size_t>(index)]);
+            }
+        }
+        if (candidates.empty()) {
+            ShowError(L"添加应用失败", L"请先选择一个未添加的已安装程序；便携程序请使用“添加便携程序”");
+            return;
+        }
+
+        AppRule rule;
+        rule.path = candidates.front()->path;
+        rule.displayName = candidates.front()->name;
+        rule.source = AppSource::Installed;
+        rule.enabled = true;
+        for (const DisplayRow* candidate : candidates) {
+            rule.targets.push_back(candidate->path);
+        }
+        if (!m_ruleManager.AddRule(std::move(rule))) {
+            ShowError(L"添加应用失败", m_ruleManager.LastError());
+            return;
+        }
+        m_blockerService.UpdateRules(m_ruleManager.Rules());
+        RefreshListView(true);
+    }
+
+    void AddPortableApplication() {
         CComPtr<IFileOpenDialog> dialog;
         HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                            IID_PPV_ARGS(&dialog));
@@ -396,7 +565,7 @@ private:
 
         const COMDLG_FILTERSPEC filters[] = {{L"应用程序 (*.exe)", L"*.exe"}};
         dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
-        dialog->SetTitle(L"选择要禁止全局快捷键的应用");
+        dialog->SetTitle(L"选择便携式应用程序");
         result = dialog->Show(m_hWnd);
         if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
             return;
@@ -432,19 +601,20 @@ private:
 
     void DeleteSelectedApplication() {
         const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_ruleManager.Rules().size())) {
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size()) ||
+            !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
             ShowError(L"删除应用失败", L"请先选择一个应用");
             return;
         }
 
-        const AppRule& rule = m_ruleManager.Rules()[static_cast<std::size_t>(index)];
-        const std::wstring message = L"确定删除规则？\n\n" + rule.path;
+        const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
+        const std::wstring message = L"确定删除规则？\n\n" + row.path;
         if (::MessageBoxW(m_hWnd, message.c_str(), L"删除应用",
                           MB_YESNO | MB_ICONQUESTION) != IDYES) {
             return;
         }
 
-        if (!m_ruleManager.Remove(rule.path)) {
+        if (!m_ruleManager.Remove(row.path)) {
             ShowError(L"删除应用失败", m_ruleManager.LastError());
             return;
         }
@@ -454,13 +624,14 @@ private:
 
     void ToggleSelectedApplication() {
         const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_ruleManager.Rules().size())) {
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size()) ||
+            !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
             ShowError(L"修改应用状态失败", L"请先选择一个应用");
             return;
         }
 
-        const AppRule& rule = m_ruleManager.Rules()[static_cast<std::size_t>(index)];
-        if (!m_ruleManager.SetEnabled(rule.path, !rule.enabled)) {
+        const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
+        if (!m_ruleManager.SetEnabled(row.path, row.enabled != L"是")) {
             ShowError(L"修改应用状态失败", m_ruleManager.LastError());
             return;
         }
@@ -470,18 +641,57 @@ private:
 
     void OpenSelectedLocation() {
         const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_ruleManager.Rules().size())) {
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
             return;
         }
 
         const std::wstring parameters = L"/select,\"" +
-                                        m_ruleManager.Rules()[static_cast<std::size_t>(index)].path +
-                                        L"\"";
+                                        m_renderedRows[static_cast<std::size_t>(index)].path + L"\"";
         const HINSTANCE result = ShellExecuteW(m_hWnd, L"open", L"explorer.exe",
                                                parameters.c_str(), nullptr, SW_SHOWNORMAL);
         if (reinterpret_cast<INT_PTR>(result) <= 32) {
             ShowError(L"打开文件位置失败", L"无法打开资源管理器");
         }
+    }
+
+    void StartDiscoveryScan() {
+        if (m_discoveryRunning.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        m_discoveryCancel.store(false, std::memory_order_release);
+        if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
+            ::EnableWindow(refreshButton, FALSE);
+        }
+
+        const HWND window = m_hWnd;
+        try {
+            m_discoveryThread = std::thread([this, window] {
+                DiscoveryResult result;
+                result.applications = ApplicationDiscovery::Scan(result.warning, &m_discoveryCancel);
+                {
+                    std::lock_guard lock(m_discoveryMutex);
+                    m_pendingDiscovery = std::move(result);
+                }
+                if (window != nullptr) {
+                    ::PostMessageW(window, kDiscoveryCompletedMessage, 0, 0);
+                }
+            });
+        } catch (...) {
+            m_discoveryRunning.store(false, std::memory_order_release);
+            if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
+                ::EnableWindow(refreshButton, TRUE);
+            }
+            ShowError(L"刷新程序失败", L"无法创建应用扫描线程");
+        }
+    }
+
+    void StopDiscoveryScan() {
+        m_discoveryCancel.store(true, std::memory_order_release);
+        if (m_discoveryThread.joinable()) {
+            m_discoveryThread.join();
+        }
+        m_discoveryRunning.store(false, std::memory_order_release);
     }
 
     void UpdateAutoStart() {
@@ -520,8 +730,14 @@ private:
     RuleManager m_ruleManager;
     StartupManager m_startupManager;
     BlockerService m_blockerService;
-    std::vector<RuntimeRuleState> m_renderedStates;
+    std::vector<DisplayRow> m_renderedRows;
+    std::vector<DiscoveredApplication> m_discoveredApps;
     std::atomic_bool m_stateNotificationPosted = false;
+    std::atomic_bool m_discoveryRunning = false;
+    std::atomic_bool m_discoveryCancel = false;
+    std::mutex m_discoveryMutex;
+    std::optional<DiscoveryResult> m_pendingDiscovery;
+    std::thread m_discoveryThread;
 };
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {

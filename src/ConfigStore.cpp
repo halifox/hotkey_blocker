@@ -162,6 +162,16 @@ bool ParseBoolean(const std::wstring& text, bool& value) {
     return false;
 }
 
+bool ParseSource(const std::wstring& text, AppSource& value) {
+    int parsed = 0;
+    if (!ParseInteger(text, parsed) || parsed < static_cast<int>(AppSource::Manual) ||
+        parsed > static_cast<int>(AppSource::Portable)) {
+        return false;
+    }
+    value = static_cast<AppSource>(parsed);
+    return true;
+}
+
 bool ParsePositiveIndex(const std::wstring& text, int& value) {
     const std::wstring trimmed = Trim(text);
     if (trimmed.empty()) {
@@ -353,20 +363,61 @@ bool WriteFileBytes(const std::filesystem::path& path, const std::string& bytes,
 
 std::wstring SerializeIni(const AppConfig& config) {
     std::wstring output;
-    output.reserve(256 + config.apps.size() * 160);
+    output.reserve(256 + config.apps.size() * 240);
     output += L"[Settings]\r\n";
     output += L"Version=" + std::to_wstring(config.version) + L"\r\n";
     output += L"AutoStart=" + std::to_wstring(config.autoStart ? 1 : 0) + L"\r\n";
 
     for (std::size_t index = 0; index < config.apps.size(); ++index) {
+        std::vector<std::wstring> targets;
+        const auto addTarget = [&targets](const std::wstring& target) {
+            if (target.empty()) {
+                return;
+            }
+            const auto duplicate = std::find_if(
+                targets.begin(), targets.end(), [&target](const std::wstring& existing) {
+                    return CompareStringOrdinal(existing.c_str(), -1, target.c_str(), -1, TRUE) ==
+                           CSTR_EQUAL;
+                });
+            if (duplicate == targets.end()) {
+                targets.push_back(target);
+            }
+        };
+        addTarget(config.apps[index].path);
+        for (const std::wstring& target : config.apps[index].targets) {
+            addTarget(target);
+        }
+
         output += L"\r\n[App." + std::to_wstring(index + 1) + L"]\r\n";
+        if (!config.apps[index].displayName.empty()) {
+            output += L"Name=" + config.apps[index].displayName + L"\r\n";
+        }
         output += L"Path=" + config.apps[index].path + L"\r\n";
         output += L"Enabled=" + std::to_wstring(config.apps[index].enabled ? 1 : 0) + L"\r\n";
+        output += L"Source=" +
+                  std::to_wstring(static_cast<int>(config.apps[index].source)) + L"\r\n";
+        output += L"TargetCount=" + std::to_wstring(targets.size()) + L"\r\n";
+        for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+            output += L"Target" + std::to_wstring(targetIndex + 1) + L"=" +
+                      targets[targetIndex] + L"\r\n";
+        }
     }
     return output;
 }
 
 }  // namespace
+
+const wchar_t* AppSourceText(AppSource source) {
+    switch (source) {
+        case AppSource::Installed:
+            return L"已安装";
+        case AppSource::Portable:
+            return L"便携式";
+        case AppSource::Manual:
+        default:
+            return L"手动";
+    }
+}
 
 ConfigStore::ConfigStore() : m_path(DefaultPath()) {}
 
@@ -419,7 +470,7 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         }
     }
 
-    if (config.version != kCurrentVersion) {
+    if (config.version != 1 && config.version != kCurrentVersion) {
         error = L"配置版本不受支持：" + std::to_wstring(config.version);
         return false;
     }
@@ -443,10 +494,41 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         }
 
         AppRule rule{*path, true};
+        if (const std::wstring* name = FindValue(section, L"name"); name != nullptr) {
+            rule.displayName = *name;
+        }
         if (const std::wstring* enabled = FindValue(section, L"enabled");
             enabled != nullptr && !ParseBoolean(*enabled, rule.enabled)) {
             error = section.name + L".Enabled 不是有效布尔值";
             return false;
+        }
+        if (config.version >= kCurrentVersion) {
+            if (const std::wstring* source = FindValue(section, L"source");
+                source != nullptr && !ParseSource(*source, rule.source)) {
+                error = section.name + L".Source 不是有效来源类型";
+                return false;
+            }
+
+            int targetCount = 0;
+            if (const std::wstring* count = FindValue(section, L"targetcount");
+                count != nullptr) {
+                if (!ParseInteger(*count, targetCount) || targetCount < 0 || targetCount > 256) {
+                    error = section.name + L".TargetCount 不是有效数量";
+                    return false;
+                }
+            }
+            for (int targetIndex = 1; targetIndex <= targetCount; ++targetIndex) {
+                const std::wstring key = L"target" + std::to_wstring(targetIndex);
+                const std::wstring* target = FindValue(section, key);
+                if (target == nullptr || target->empty()) {
+                    error = section.name + L" 缺少 " + key;
+                    return false;
+                }
+                rule.targets.push_back(*target);
+            }
+        }
+        if (rule.targets.empty()) {
+            rule.targets.push_back(rule.path);
         }
         indexedRules.push_back({index, std::move(rule)});
     }
@@ -459,6 +541,7 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
     for (IndexedRule& indexedRule : indexedRules) {
         config.apps.push_back(std::move(indexedRule.rule));
     }
+    config.version = kCurrentVersion;
     return true;
 }
 
