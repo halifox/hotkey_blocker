@@ -64,6 +64,7 @@ target_link_libraries(hkb PRIVATE
         advapi32
         comctl32
         ole32
+        propsys
         shell32
         wbemuuid
 )

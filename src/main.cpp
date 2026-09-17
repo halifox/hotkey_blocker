@@ -33,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "ApplicationDiscovery.h"
@@ -91,6 +92,7 @@ private:
     struct DiscoveryResult {
         std::vector<DiscoveredApplication> applications;
         std::wstring warning;
+        DiscoveryStats stats;
     };
 
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
@@ -127,6 +129,7 @@ private:
         StartDiscoveryScan();
 
         m_trayIconAdded = AddTrayIcon();
+        NotifyActionableStates();
         if (m_startHidden) {
             ::ShowWindow(m_hWnd, SW_HIDE);
         }
@@ -154,6 +157,7 @@ private:
         for (;;) {
             m_stateNotificationPosted.store(false, std::memory_order_release);
             RefreshListView(false);
+            NotifyActionableStates();
             if (!m_stateNotificationPosted.load(std::memory_order_acquire)) {
                 break;
             }
@@ -184,6 +188,9 @@ private:
             m_logger.Error(L"应用扫描提示：" + result->warning);
         }
         m_discoveredApps = std::move(result->applications);
+        m_discoveryStats = result->stats;
+        SetScanStatusText(DiscoverySummary(m_discoveryStats));
+        m_logger.Info(L"应用扫描完成：" + DiscoverySummary(m_discoveryStats));
         RefreshListView(true);
         return 0;
     }
@@ -224,6 +231,25 @@ private:
 
     LRESULT OnNotify(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
         const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+        if (header != nullptr && header->idFrom == IDC_APP_LIST &&
+            header->code == LVN_GETINFOTIPW) {
+            const auto* infoTip = reinterpret_cast<const NMLVGETINFOTIPW*>(lParam);
+            if (infoTip->iItem >= 0 &&
+                infoTip->iItem < static_cast<int>(m_renderedRows.size()) &&
+                infoTip->pszText != nullptr && infoTip->cchTextMax > 0) {
+                const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(infoTip->iItem)];
+                std::wstring tip = row.detail;
+                if (!tip.empty() && !row.path.empty()) {
+                    tip += L"\n";
+                }
+                if (!row.path.empty()) {
+                    tip += row.path;
+                }
+                wcsncpy_s(infoTip->pszText, infoTip->cchTextMax, tip.c_str(), _TRUNCATE);
+            }
+            handled = TRUE;
+            return 0;
+        }
         if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
             handled = TRUE;
             const int index = SelectedIndex();
@@ -331,12 +357,11 @@ private:
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
                             LVS_EX_LABELTIP);
-        InsertColumn(0, L"应用", 180);
-        InsertColumn(1, L"完整路径", 390);
-        InsertColumn(2, L"来源", 75);
+        InsertColumn(0, L"应用", 170);
+        InsertColumn(1, L"完整路径", 360);
+        InsertColumn(2, L"来源", 70);
         InsertColumn(3, L"启用", 55);
-        InsertColumn(4, L"状态", 95);
-        InsertColumn(5, L"详情", 280);
+        InsertColumn(4, L"状态", 89);
     }
 
     void InsertColumn(int index, const wchar_t* title, int width) {
@@ -422,7 +447,7 @@ private:
             row.path = state.rule.path;
             row.source = AppSourceText(state.rule.source);
             row.enabled = state.rule.enabled ? L"是" : L"否";
-            row.status = AppStatusText(state.status);
+            row.status = IsActionableStatus(state.status) ? AppStatusText(state.status) : L"";
             row.detail = state.detail;
             if (state.rule.targets.size() > 1) {
                 if (!row.detail.empty()) {
@@ -445,8 +470,8 @@ private:
                            : application.displayName;
             row.path = application.path;
             row.source = AppSourceText(application.source);
-            row.enabled = L"否";
-            row.status = L"未添加";
+            row.enabled = L"—";
+            row.status.clear();
             row.detail = application.publisher;
             if (!application.version.empty()) {
                 if (!row.detail.empty()) {
@@ -491,7 +516,6 @@ private:
         SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.source.c_str()));
         SetListItemText(itemIndex, 3, const_cast<LPWSTR>(row.enabled.c_str()));
         SetListItemText(itemIndex, 4, const_cast<LPWSTR>(row.status.c_str()));
-        SetListItemText(itemIndex, 5, const_cast<LPWSTR>(row.detail.c_str()));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
@@ -660,6 +684,7 @@ private:
         }
 
         m_discoveryCancel.store(false, std::memory_order_release);
+        SetScanStatusText(L"正在扫描已安装程序...");
         if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
             ::EnableWindow(refreshButton, FALSE);
         }
@@ -668,7 +693,8 @@ private:
         try {
             m_discoveryThread = std::thread([this, window] {
                 DiscoveryResult result;
-                result.applications = ApplicationDiscovery::Scan(result.warning, &m_discoveryCancel);
+                result.applications = ApplicationDiscovery::Scan(
+                    result.warning, &m_discoveryCancel, &result.stats);
                 {
                     std::lock_guard lock(m_discoveryMutex);
                     m_pendingDiscovery = std::move(result);
@@ -682,6 +708,7 @@ private:
             if (HWND refreshButton = GetDlgItem(IDC_REFRESH_APPS); refreshButton != nullptr) {
                 ::EnableWindow(refreshButton, TRUE);
             }
+            SetScanStatusText(L"应用扫描启动失败");
             ShowError(L"刷新程序失败", L"无法创建应用扫描线程");
         }
     }
@@ -712,6 +739,97 @@ private:
         }
     }
 
+    static bool IsActionableStatus(AppStatus status) {
+        switch (status) {
+            case AppStatus::RestartRequired:
+            case AppStatus::PartiallyBlocked:
+            case AppStatus::InjectionFailed:
+            case AppStatus::PathMissing:
+                return true;
+            case AppStatus::Waiting:
+            case AppStatus::Injecting:
+            case AppStatus::Blocked:
+            case AppStatus::Disabled:
+            default:
+                return false;
+        }
+    }
+
+    static std::wstring DiscoverySummary(const DiscoveryStats& stats) {
+        std::wstring result = L"发现 " + std::to_wstring(stats.applications) + L" 个可用程序";
+        const std::size_t sourceEntries = stats.appsFolderEntries + stats.startMenuShortcuts +
+                                           stats.appPathsEntries + stats.uninstallEntries;
+        if (sourceEntries != 0) {
+            result += L"，检查 " + std::to_wstring(sourceEntries) + L" 个系统条目";
+        }
+        if (stats.unresolvedEntries != 0) {
+            result += L"，跳过 " + std::to_wstring(stats.unresolvedEntries) +
+                      L" 个无法定位启动文件的条目";
+        }
+        return result;
+    }
+
+    void SetScanStatusText(const std::wstring& text) const {
+        if (HWND status = GetDlgItem(IDC_SCAN_STATUS); status != nullptr) {
+            ::SetWindowTextW(status, text.c_str());
+        }
+    }
+
+    void NotifyActionableStates() {
+        const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
+        std::unordered_map<std::wstring, AppStatus> current;
+        for (const RuntimeRuleState& state : states) {
+            if (!IsActionableStatus(state.status)) {
+                continue;
+            }
+            current[state.rule.path] = state.status;
+            if (!m_trayIconAdded) {
+                continue;
+            }
+
+            const auto previous = m_notifiedActionableStates.find(state.rule.path);
+            if (previous != m_notifiedActionableStates.end() &&
+                previous->second == state.status) {
+                continue;
+            }
+
+            std::wstring message = AppStatusText(state.status);
+            if (!state.detail.empty()) {
+                message += L"：" + state.detail;
+            }
+            ShowTrayNotification(state.rule.displayName.empty() ? L"应用状态提醒"
+                                                                 : state.rule.displayName,
+                                 message);
+            m_notifiedActionableStates[state.rule.path] = state.status;
+        }
+
+        for (auto iterator = m_notifiedActionableStates.begin();
+             iterator != m_notifiedActionableStates.end();) {
+            if (current.find(iterator->first) == current.end()) {
+                iterator = m_notifiedActionableStates.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+    }
+
+    void ShowTrayNotification(const std::wstring& title, const std::wstring& message) const {
+        if (!m_trayIconAdded) {
+            return;
+        }
+
+        NOTIFYICONDATAW data{};
+        data.cbSize = sizeof(data);
+        data.hWnd = m_hWnd;
+        data.uID = kTrayIconId;
+        data.uFlags = NIF_INFO;
+        data.dwInfoFlags = NIIF_WARNING;
+        data.uTimeout = 5000;
+        wcsncpy_s(data.szInfoTitle, std::size(data.szInfoTitle), title.c_str(), _TRUNCATE);
+        wcsncpy_s(data.szInfo, std::size(data.szInfo), message.c_str(), _TRUNCATE);
+        Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+
     void ShowError(const wchar_t* title, const std::wstring& message) const {
         ::MessageBoxW(m_hWnd, message.empty() ? L"未知错误" : message.c_str(), title,
                       MB_OK | MB_ICONERROR);
@@ -732,6 +850,8 @@ private:
     BlockerService m_blockerService;
     std::vector<DisplayRow> m_renderedRows;
     std::vector<DiscoveredApplication> m_discoveredApps;
+    DiscoveryStats m_discoveryStats;
+    std::unordered_map<std::wstring, AppStatus> m_notifiedActionableStates;
     std::atomic_bool m_stateNotificationPosted = false;
     std::atomic_bool m_discoveryRunning = false;
     std::atomic_bool m_discoveryCancel = false;

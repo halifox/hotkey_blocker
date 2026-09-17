@@ -3,6 +3,8 @@
 #include "PathUtils.h"
 
 #include <windows.h>
+#include <propsys.h>
+#include <propkey.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 
@@ -74,29 +76,44 @@ std::wstring ParseExecutableValue(const std::wstring& value) {
         return {};
     }
 
+    const auto tryPath = [](std::wstring candidate) {
+        candidate = ExpandEnvironmentVariables(Trim(std::move(candidate)));
+        if (!IsExePath(candidate) || !IsRegularFile(candidate)) {
+            return std::wstring{};
+        }
+        return PathUtils::NormalizePath(candidate);
+    };
+
     if (result.front() == L'"') {
         const std::size_t closingQuote = result.find(L'"', 1);
         if (closingQuote == std::wstring::npos) {
             return {};
         }
         result = result.substr(1, closingQuote - 1);
-    } else {
-        const std::size_t separator = result.find(L',');
-        if (separator != std::wstring::npos) {
-            result.resize(separator);
-        } else {
-            const std::size_t argument = result.find_first_of(L" \t");
-            if (argument != std::wstring::npos) {
-                result.resize(argument);
-            }
+        return tryPath(result);
+    }
+
+    // DisplayIcon and App Paths commonly store an unquoted executable path.
+    // Do not split at the first space: paths such as "C:\\Program Files\\..."
+    // are valid. First try the complete value, then progressively try each
+    // .exe boundary to support an icon index or command-line arguments.
+    if (const std::wstring executable = tryPath(result); !executable.empty()) {
+        return executable;
+    }
+
+    const std::wstring expanded = ExpandEnvironmentVariables(result);
+    for (std::size_t position = 0; position + 4 <= expanded.size(); ++position) {
+        if (CompareStringOrdinal(expanded.c_str() + position, 4, L".exe", 4, TRUE) !=
+            CSTR_EQUAL) {
+            continue;
+        }
+        if (const std::wstring executable = tryPath(expanded.substr(0, position + 4));
+            !executable.empty()) {
+            return executable;
         }
     }
 
-    result = ExpandEnvironmentVariables(Trim(result));
-    if (!IsExePath(result) || !IsRegularFile(result)) {
-        return {};
-    }
-    return PathUtils::NormalizePath(result);
+    return {};
 }
 
 std::wstring ReadRegistryString(HKEY key, const wchar_t* valueName) {
@@ -182,8 +199,136 @@ void AddOrMerge(std::vector<DiscoveredApplication>& applications,
     }
 }
 
+std::wstring ShellItemProperty(IShellItem2* item, REFPROPERTYKEY key) {
+    if (item == nullptr) {
+        return {};
+    }
+
+    CComPtr<IPropertyStore> propertyStore;
+    if (FAILED(item->GetPropertyStore(GPS_DEFAULT, IID_PPV_ARGS(&propertyStore)))) {
+        return {};
+    }
+
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    const HRESULT result = propertyStore->GetValue(key, &value);
+    std::wstring text;
+    if (SUCCEEDED(result)) {
+        if (value.vt == VT_LPWSTR && value.pwszVal != nullptr) {
+            text = value.pwszVal;
+        } else if (value.vt == VT_BSTR && value.bstrVal != nullptr) {
+            text = value.bstrVal;
+        }
+    }
+    PropVariantClear(&value);
+    return text;
+}
+
+std::wstring ShellItemDisplayName(IShellItem2* item) {
+    if (item == nullptr) {
+        return {};
+    }
+    PWSTR rawName = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &rawName)) || rawName == nullptr) {
+        return {};
+    }
+    std::wstring name(rawName);
+    CoTaskMemFree(rawName);
+    return name;
+}
+
+std::wstring ShellItemExecutable(IShellItem2* item) {
+    if (item == nullptr) {
+        return {};
+    }
+
+    PWSTR rawPath = nullptr;
+    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath)) && rawPath != nullptr) {
+        const std::wstring path = ParseExecutableValue(rawPath);
+        CoTaskMemFree(rawPath);
+        if (!path.empty()) {
+            return path;
+        }
+    }
+
+    const PROPERTYKEY keys[] = {PKEY_Link_TargetParsingPath, PKEY_ParsingPath};
+    for (const PROPERTYKEY& key : keys) {
+        const std::wstring value = ShellItemProperty(item, key);
+        if (const std::wstring path = ParseExecutableValue(value); !path.empty()) {
+            return path;
+        }
+    }
+    return {};
+}
+
+void ScanAppsFolder(std::vector<DiscoveredApplication>& applications,
+                    DiscoveryStats* stats, const std::atomic_bool* cancellation) {
+    if (IsCancelled(cancellation)) {
+        return;
+    }
+
+    PIDLIST_ABSOLUTE folderId = nullptr;
+    if (FAILED(SHParseDisplayName(L"shell:AppsFolder", nullptr, &folderId, 0, nullptr)) ||
+        folderId == nullptr) {
+        return;
+    }
+
+    CComPtr<IShellFolder> folder;
+    HRESULT result = SHBindToObject(nullptr, folderId, nullptr, IID_PPV_ARGS(&folder));
+    if (FAILED(result) || folder == nullptr) {
+        CoTaskMemFree(folderId);
+        return;
+    }
+
+    CComPtr<IEnumIDList> enumerator;
+    result = folder->EnumObjects(nullptr,
+                                 SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN,
+                                 &enumerator);
+    if (FAILED(result) || enumerator == nullptr) {
+        CoTaskMemFree(folderId);
+        return;
+    }
+
+    for (;;) {
+        if (IsCancelled(cancellation)) {
+            break;
+        }
+
+        PITEMID_CHILD childId = nullptr;
+        ULONG fetched = 0;
+        result = enumerator->Next(1, &childId, &fetched);
+        if (result != S_OK || fetched == 0 || childId == nullptr) {
+            break;
+        }
+        ++stats->appsFolderEntries;
+
+        CComPtr<IShellItem2> item;
+        result = SHCreateItemWithParent(folderId, folder, childId, IID_PPV_ARGS(&item));
+        if (FAILED(result) || item == nullptr) {
+            ++stats->unresolvedEntries;
+            CoTaskMemFree(childId);
+            continue;
+        }
+
+        const std::wstring executable = ShellItemExecutable(item);
+        if (executable.empty()) {
+            ++stats->unresolvedEntries;
+            CoTaskMemFree(childId);
+            continue;
+        }
+
+        DiscoveredApplication application;
+        application.path = executable;
+        application.displayName = ShellItemDisplayName(item);
+        AddOrMerge(applications, std::move(application));
+        CoTaskMemFree(childId);
+    }
+    CoTaskMemFree(folderId);
+}
+
 void ScanStartMenuDirectory(const std::filesystem::path& root,
                             std::vector<DiscoveredApplication>& applications,
+                            DiscoveryStats* stats,
                             const std::atomic_bool* cancellation) {
     if (root.empty() || IsCancelled(cancellation)) {
         return;
@@ -203,8 +348,10 @@ void ScanStartMenuDirectory(const std::filesystem::path& root,
             continue;
         }
 
+        ++stats->startMenuShortcuts;
         const std::wstring target = ShortcutTarget(iterator->path());
         if (target.empty()) {
+            ++stats->unresolvedEntries;
             continue;
         }
         DiscoveredApplication application;
@@ -215,6 +362,7 @@ void ScanStartMenuDirectory(const std::filesystem::path& root,
 }
 
 void ScanAppPaths(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& applications,
+                  DiscoveryStats* stats,
                   const std::atomic_bool* cancellation) {
     HKEY key = nullptr;
     if (RegOpenKeyExW(root, L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths", 0,
@@ -234,14 +382,17 @@ void ScanAppPaths(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& ap
         if (result != ERROR_SUCCESS) {
             continue;
         }
+        ++stats->appPathsEntries;
 
         HKEY entry = nullptr;
         if (RegOpenKeyExW(key, name, 0, KEY_READ, &entry) != ERROR_SUCCESS) {
+            ++stats->unresolvedEntries;
             continue;
         }
         const std::wstring path = ParseExecutableValue(ReadRegistryString(entry, nullptr));
         RegCloseKey(entry);
         if (path.empty()) {
+            ++stats->unresolvedEntries;
             continue;
         }
 
@@ -274,6 +425,7 @@ std::wstring FindSingleExecutable(const std::wstring& directory) {
 }
 
 void ScanUninstall(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& applications,
+                   DiscoveryStats* stats,
                    const std::atomic_bool* cancellation) {
     HKEY key = nullptr;
     if (RegOpenKeyExW(root, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0,
@@ -303,6 +455,7 @@ void ScanUninstall(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& a
             RegCloseKey(entry);
             continue;
         }
+        ++stats->uninstallEntries;
 
         std::wstring executable = ParseExecutableValue(ReadRegistryString(entry, L"DisplayIcon"));
         const std::wstring installLocation =
@@ -318,6 +471,8 @@ void ScanUninstall(HKEY root, REGSAM view, std::vector<DiscoveredApplication>& a
             application.version = ReadRegistryString(entry, L"DisplayVersion");
             application.installLocation = installLocation;
             AddOrMerge(applications, std::move(application));
+        } else {
+            ++stats->unresolvedEntries;
         }
         RegCloseKey(entry);
     }
@@ -336,9 +491,16 @@ void AppendWarning(std::wstring& warning, const std::wstring& message) {
 namespace ApplicationDiscovery {
 
 std::vector<DiscoveredApplication> Scan(std::wstring& warning,
-                                       const std::atomic_bool* cancellation) {
+                                       const std::atomic_bool* cancellation,
+                                       DiscoveryStats* stats) {
     std::vector<DiscoveredApplication> applications;
     warning.clear();
+    DiscoveryStats localStats;
+    if (stats == nullptr) {
+        stats = &localStats;
+    } else {
+        *stats = {};
+    }
 
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool shouldUninitialize = SUCCEEDED(initialized);
@@ -346,8 +508,10 @@ std::vector<DiscoveredApplication> Scan(std::wstring& warning,
         AppendWarning(warning, L"初始化应用发现组件失败");
     }
 
-    ScanStartMenuDirectory(KnownFolderPath(FOLDERID_Programs), applications, cancellation);
-    ScanStartMenuDirectory(KnownFolderPath(FOLDERID_CommonPrograms), applications, cancellation);
+    ScanAppsFolder(applications, stats, cancellation);
+    ScanStartMenuDirectory(KnownFolderPath(FOLDERID_Programs), applications, stats, cancellation);
+    ScanStartMenuDirectory(KnownFolderPath(FOLDERID_CommonPrograms), applications, stats,
+                           cancellation);
 
     constexpr REGSAM views[] = {KEY_WOW64_64KEY, KEY_WOW64_32KEY};
     const HKEY roots[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
@@ -356,8 +520,8 @@ std::vector<DiscoveredApplication> Scan(std::wstring& warning,
             if (IsCancelled(cancellation)) {
                 break;
             }
-            ScanAppPaths(root, view, applications, cancellation);
-            ScanUninstall(root, view, applications, cancellation);
+            ScanAppPaths(root, view, applications, stats, cancellation);
+            ScanUninstall(root, view, applications, stats, cancellation);
         }
     }
 
@@ -374,6 +538,7 @@ std::vector<DiscoveredApplication> Scan(std::wstring& warning,
         return CompareStringOrdinal(left.path.c_str(), -1, right.path.c_str(), -1, TRUE) ==
                CSTR_LESS_THAN;
     });
+    stats->applications = applications.size();
     return applications;
 }
 
