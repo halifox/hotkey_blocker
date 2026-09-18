@@ -1,8 +1,10 @@
 # 构建、测试和打包
 
+本文档说明 Hotkey Blocker 在 Windows 上的本地构建、测试、签名和安装包生成流程。
+
 ## 构建环境
 
-推荐使用 Windows 10/11 和 64 位主机。项目源码按 Windows x86/x64 目标构建，当前没有 ARM64 专用 Hook 组件。
+推荐使用 Windows 10/11 和 64 位主机。项目源码提供 Windows x86/x64 目标，当前没有 ARM64 专用 Hook 组件。
 
 需要安装：
 
@@ -14,7 +16,7 @@
 - Ninja
 - PowerShell 5.1 或更高版本
 
-构建脚本通过 `vswhere.exe` 查找 Visual Studio，并调用对应的 `VsDevCmd.bat` 初始化 MSVC 环境。若使用手工命令，必须先进入 Visual Studio Developer PowerShell，或者执行相应的 `VsDevCmd.bat`。
+构建脚本通过 `vswhere.exe` 查找 Visual Studio，并调用对应的 `VsDevCmd.bat` 初始化 MSVC 环境。手工执行 CMake 命令时，请先进入 Visual Studio Developer PowerShell，或执行相应的 `VsDevCmd.bat`。
 
 ## 推荐构建方式
 
@@ -24,7 +26,7 @@
 .\scripts\build.ps1 -Architecture x64 -Configuration Release
 ```
 
-可选参数：
+常用参数：
 
 ```powershell
 # x86 Release
@@ -33,11 +35,11 @@
 # x64 Debug
 .\scripts\build.ps1 -Architecture x64 -Configuration Debug
 
-# 删除本项目 out/build 和 out/bin 中对应预设的产物后重新构建
+# 删除本项目管理的 x64 Release 产物后重新构建
 .\scripts\build.ps1 -Architecture x64 -Configuration Release -Clean
 ```
 
-脚本只删除它自己管理的 `out/build/<preset>` 和 `out/bin/<preset>` 目录，不会操作源码目录或其他构建目录。
+`-Clean` 只删除脚本管理的 `out/build/<preset>` 和 `out/bin/<preset>` 目录，不会操作源码目录或其他构建目录。
 
 ## CMake Presets
 
@@ -53,12 +55,12 @@
 手工使用预设时，先初始化目标架构的 MSVC 环境：
 
 ```powershell
-# 在 Developer PowerShell 或等价的 VS 环境中
+# 在 Developer PowerShell 或等价的 Visual Studio 环境中
 cmake --preset x64-release
 cmake --build --preset x64-release --parallel
 ```
 
-x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDevCmd.bat -arch=x86 -host_arch=x64` 或 `-arch=x64 -host_arch=x64`，因此更适合重复构建和 CI。
+x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDevCmd.bat -arch=x86 -host_arch=x64` 或 `-arch=x64 -host_arch=x64`，适合重复构建和 CI 环境。
 
 ## 输出目录
 
@@ -67,9 +69,9 @@ x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDe
 - `out/bin/x86-release/`：x86 可执行文件、Hook DLL 和 x86 注入辅助程序
 - `out/packages/`：安装包和 SHA-256 校验文件
 
-这些目录都被 `.gitignore` 忽略，不应提交到源码仓库。
+上述目录均被 `.gitignore` 忽略，不应提交到源码仓库。
 
-## 运行库、测试和签名
+## 运行库、测试与签名
 
 MSVC 目标默认使用静态运行库（Release 为 `/MT`，Debug 为 `/MTd`）。因此由本项目构建的主程序、Hook DLL 和辅助程序不要求目标机器另外安装 Visual C++ Redistributable；这不代表可以省略 Windows SDK、ATL 或构建机上的 MSVC 工具链。
 
@@ -80,7 +82,7 @@ ctest --test-dir out/build/x64-release --output-on-failure
 ctest --test-dir out/build/x86-release --output-on-failure
 ```
 
-测试覆盖配置读写、Hotkey 注册注入以及 BlockerService 的进程生命周期。若只需要构建产品目标，可以在 CMake 配置时传入 `-DHKB_BUILD_TESTS=OFF`。
+测试覆盖配置读写、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
 
 本地构建默认不签名。正式发布必须提供真实的 Authenticode 证书，脚本会对主程序、Hook DLL、x86 注入辅助程序和安装包逐一签名并验证：
 
@@ -129,9 +131,9 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 
 ## CI
 
-`.github/workflows/ci.yml` 会在 Windows runner 上分别构建 x86 和 x64 Release。`.github/workflows/release.yml` 会在推送 `v*` Tag 时构建 x64 安装包并生成 SHA-256 文件。
+`.github/workflows/ci.yml` 会在 Windows runner 上分别构建 x86 和 x64 Release，并运行 CTest。`.github/workflows/release.yml` 会在推送 `v*` Tag 时构建 x64 安装包并生成 SHA-256 文件。
 
-项目没有把 Visual Studio 编译器本身提交到仓库，因此不同 Visual Studio 版本不保证产生逐字节相同的二进制。若需要长期可复现的发布结果，应固定 GitHub runner、Visual Studio 工具链版本，并保存发布构建日志。
+项目没有将 Visual Studio 编译器提交到仓库，因此不同 Visual Studio 版本不保证产生逐字节相同的二进制。若需要长期可复现的发布结果，应固定 GitHub runner、Visual Studio 工具链版本，并保存发布构建日志。
 
 ## 常见问题
 

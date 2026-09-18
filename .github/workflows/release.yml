@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '三段数字版本，例如 1.0.0'
+        description: '语义化版本号，例如 1.0.0'
         required: true
         type: string
 

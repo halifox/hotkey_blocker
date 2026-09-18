@@ -1,34 +1,32 @@
 # Hotkey Blocker
 
-> 我讨厌各种流氓软件注册全局快捷键，导致我当前使用的软件快捷键失效。更让人恼火的是，这些设置项往往隐藏得很深，甚至根本没有设置项。
+Hotkey Blocker 是 Windows 桌面工具，用于阻止选定应用通过标准 `RegisterHotKey` API 注册全局快捷键，避免目标应用占用其他程序需要的快捷键。
 
-Hotkey Blocker 是一个 Windows 工具，用于阻止指定应用通过标准 `RegisterHotKey` API 注册全局快捷键。
+程序根据目标进程的架构加载相应的 Hook DLL，在目标进程中拦截标准快捷键注册请求。它适用于目标应用未提供相关设置、但用户需要保留快捷键控制权的场景。
 
-它适合处理“某个应用占用了本应由当前应用使用的全局快捷键”这类问题。项目通过按目标进程架构加载对应的 Hook DLL 来完成拦截。
+## 主要功能
 
-## 功能
+- 添加单个 `.exe` 文件规则
+- 添加文件夹规则并递归匹配其中的应用程序
+- 自动处理规则创建后启动的目标进程
+- 启用、停用和删除规则
+- 显示规则、目标进程和拦截状态
+- 在系统托盘中运行
+- 支持登录时自动启动
+- 提供 x86 和 x64 构建
 
-- 添加单个 `.exe` 文件
-- 添加文件夹并递归匹配其中的应用
-- 自动处理之后启动的目标进程
-- 启用、停用或删除规则
-- 显示目标应用的运行、注入和拦截状态
-- 系统托盘运行
-- 登录时自动启动
-- 同时提供 x86 和 x64 构建
+## 支持范围与限制
 
-## 支持范围和限制
+- 发布版本支持 Windows x86/x64；项目未提供独立的 ARM64 Hook 组件。
+- 目标应用已运行时，需要先重启该应用才能加载 Hook。
+- 目标应用以更高权限运行时，程序可能无法打开或注入该进程；程序不会绕过 Windows 权限边界。
+- 程序只拦截标准 `RegisterHotKey` 调用，不保证处理低级键盘钩子、键盘驱动或其他自定义快捷键实现。
+- 受保护进程、反作弊软件、动态代码策略和安全软件可能拒绝 DLL 注入。
+- 本项目不是安全边界或反恶意软件工具。注入行为可能触发杀毒软件或 SmartScreen 的误报。
 
-- 当前发布目标是 Windows x86/x64；ARM64 尚未作为独立架构支持。
-- 目标应用已经运行时，需要先重启目标应用才能加载 Hook。
-- 目标应用以更高权限运行时，本程序可能无法打开或注入它；本程序不会绕过 Windows 权限边界。
-- 只拦截标准 `RegisterHotKey` 调用，不保证拦截应用自定义的键盘驱动、低级键盘钩子或其他快捷键实现。
-- 受保护进程、反作弊软件、动态代码策略或安全软件可能拒绝 DLL 注入。
-- 本项目不是安全边界，也不是反恶意软件工具。注入行为可能触发杀毒软件或 SmartScreen 的误报。
+## 从源码构建
 
-## 快速构建
-
-要求：带 Desktop C++ 工作负载的 Visual Studio、MSVC、Windows SDK、ATL、CMake 3.25 或更高版本、Ninja 和 PowerShell。完整说明见 [docs/BUILD.md](docs/BUILD.md)。
+构建需要 Visual Studio 的 Desktop development with C++ 工作负载、MSVC、Windows SDK、ATL、CMake 3.25 或更高版本、Ninja 和 PowerShell。完整说明见 [构建、测试和打包](docs/BUILD.md)。
 
 在仓库根目录执行：
 
@@ -44,31 +42,33 @@ Hotkey Blocker 是一个 Windows 工具，用于阻止指定应用通过标准 `
 
 构建产物位于 `out/bin/`，安装包和 SHA-256 校验文件位于 `out/packages/`。
 
-也可以在已经初始化的 Visual Studio Developer PowerShell 中直接使用预设：
+在已初始化的 Visual Studio Developer PowerShell 中，也可以直接使用 CMake 预设：
 
 ```powershell
 cmake --preset x64-release
 cmake --build --preset x64-release --parallel
 ```
 
-构建预设会把不同架构和配置放入不同目录，避免 Debug/Release 或 x86/x64 产物相互覆盖。
+不同架构和配置使用独立输出目录，避免 Debug/Release 或 x86/x64 产物相互覆盖。
 
-## 使用文档
+## 项目文档
 
 - [构建、测试和打包](docs/BUILD.md)
 - [用户指南和故障排查](docs/USER_GUIDE.md)
-- [安全说明和威胁模型](SECURITY.md)
+- [安全说明](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
+- [行为准则](CODE_OF_CONDUCT.md)
 - [变更记录](CHANGELOG.md)
+- [第三方依赖与许可证](THIRD_PARTY_NOTICES.md)
 
-## 配置和日志
+## 配置文件与日志
 
 默认情况下，程序使用当前用户的本地应用数据目录：
 
 - 配置：`%LOCALAPPDATA%\HotkeyBlocker\config.ini`
 - 日志：`%LOCALAPPDATA%\HotkeyBlocker\logs\hkb.log`
 
-日志可能包含目标进程路径和 PID。提交 Issue 前请检查并脱敏。
+日志可能包含目标进程路径和 PID。提交 Issue 或安全报告前，请检查并脱敏相关内容。
 
 ## 许可证
 
