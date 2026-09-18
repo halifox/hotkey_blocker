@@ -25,6 +25,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          $nsisCandidates = @(
+            (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
+            (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')
+          )
+          $nsis = $nsisCandidates |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+          if (-not $nsis) {
+            throw 'NSIS installation completed, but makensis.exe was not found.'
+          }
+          $nsisDirectory = Split-Path -Parent $nsis
+          $nsisDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $nsis /VERSION
+
       - name: Build installer
         shell: pwsh
         env:
