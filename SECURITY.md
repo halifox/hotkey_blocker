@@ -56,7 +56,7 @@ Hotkey Blocker 是一个本地 Windows 工具，不是安全产品、反恶意�
 
 ## 安全报告
 
-请不要在公开 Issue 中发布可直接利用的漏洞细节、恶意 DLL 或私人日志。优先使用 GitHub 的 [Security Advisories](https://github.com/halifox/hkb/security/advisories/new) 提交私密报告；如果该入口不可用，请先开一个不包含技术细节的 Issue，请维护者提供私密联系方式。
+请不要在公开 Issue 中发布可直接利用的漏洞细节、恶意 DLL 或私人日志。优先使用 GitHub 的 [Security Advisories](https://github.com/halifox/hotkey_blocker/security/advisories/new) 提交私密报告；如果该入口不可用，请先开一个不包含技术细节的 Issue，请维护者提供私密联系方式。
 
 报告中请尽量包含：
 
