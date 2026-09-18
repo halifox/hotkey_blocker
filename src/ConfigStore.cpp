@@ -128,6 +128,32 @@ bool ParseInteger(const std::wstring& text, int& value) {
     return true;
 }
 
+bool ParseUnsigned(const std::wstring& text, std::uint32_t& value) {
+    const std::wstring trimmed = Trim(text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    const wchar_t* begin = trimmed.c_str();
+    int base = 10;
+    if (trimmed.size() > 2 && trimmed[0] == L'0' &&
+        (trimmed[1] == L'x' || trimmed[1] == L'X')) {
+        begin += 2;
+        base = 16;
+    }
+    if (*begin == L'\0') {
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    const unsigned long long parsed = wcstoull(begin, &end, base);
+    if (end == begin || *end != L'\0' || parsed > UINT32_MAX) {
+        return false;
+    }
+    value = static_cast<std::uint32_t>(parsed);
+    return true;
+}
+
 bool ParseBoolean(const std::wstring& text, bool& value) {
     const std::wstring normalized = AsciiLower(Trim(text));
     if (normalized == L"1" || normalized == L"true" || normalized == L"yes") {
@@ -159,6 +185,62 @@ bool ParsePositiveIndex(const std::wstring& text, int& value) {
     }
     value = static_cast<int>(parsed);
     return true;
+}
+
+bool ParseHotkeyIndex(std::wstring_view key, int& index) {
+    constexpr std::wstring_view kPrefix = L"hotkey.";
+    if (key.size() <= kPrefix.size() || key.compare(0, kPrefix.size(), kPrefix) != 0) {
+        return false;
+    }
+    return ParsePositiveIndex(std::wstring(key.substr(kPrefix.size())), index);
+}
+
+bool ParseHotkeyMode(const std::wstring& text, HotkeyMode& mode) {
+    const std::wstring normalized = AsciiLower(Trim(text));
+    if (normalized == L"block_all" || normalized == L"all") {
+        mode = HotkeyMode::BlockAll;
+        return true;
+    }
+    if (normalized == L"blacklist") {
+        mode = HotkeyMode::Blacklist;
+        return true;
+    }
+    if (normalized == L"whitelist") {
+        mode = HotkeyMode::Whitelist;
+        return true;
+    }
+    return false;
+}
+
+const wchar_t* HotkeyModeText(HotkeyMode mode) {
+    switch (mode) {
+        case HotkeyMode::BlockAll:
+            return L"block_all";
+        case HotkeyMode::Blacklist:
+            return L"blacklist";
+        case HotkeyMode::Whitelist:
+            return L"whitelist";
+        default:
+            return L"";
+    }
+}
+
+bool ParseHotkeySpec(const std::wstring& text, HotkeySpec& hotkey) {
+    const std::wstring trimmed = Trim(text);
+    const std::size_t separator = trimmed.find(L':');
+    if (separator == std::wstring::npos) {
+        return false;
+    }
+
+    std::uint32_t modifiers = 0;
+    std::uint32_t virtualKey = 0;
+    if (!ParseUnsigned(trimmed.substr(0, separator), modifiers) ||
+        !ParseUnsigned(trimmed.substr(separator + 1), virtualKey)) {
+        return false;
+    }
+
+    hotkey = NormalizeHotkey({modifiers, virtualKey});
+    return IsValidHotkey(hotkey);
 }
 
 struct IniSection {
@@ -351,6 +433,15 @@ std::wstring SerializeIni(const AppConfig& config) {
                   std::wstring(config.apps[index].kind == RuleKind::Directory ? L"directory"
                                                                                 : L"executable") +
                   L"\r\n";
+        output += L"HotkeyMode=" +
+                  std::wstring(HotkeyModeText(config.apps[index].hotkeyPolicy.mode)) + L"\r\n";
+        for (std::size_t hotkeyIndex = 0;
+             hotkeyIndex < config.apps[index].hotkeyPolicy.hotkeys.size(); ++hotkeyIndex) {
+            const HotkeySpec& hotkey = config.apps[index].hotkeyPolicy.hotkeys[hotkeyIndex];
+            output += L"Hotkey." + std::to_wstring(hotkeyIndex + 1) + L"=" +
+                      std::to_wstring(hotkey.modifiers) + L":" +
+                      std::to_wstring(hotkey.virtualKey) + L"\r\n";
+        }
     }
     return output;
 }
@@ -413,10 +504,12 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         error = L"配置文件缺少 Settings 节";
         return false;
     }
-    if (config.version != kCurrentVersion) {
+    if (config.version != 1 && config.version != kCurrentVersion) {
         error = L"配置版本不受支持：" + std::to_wstring(config.version);
         return false;
     }
+
+    const bool legacyConfig = config.version == 1;
 
     struct IndexedRule {
         int index;
@@ -459,6 +552,46 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
             error = section.name + L".Kind 不是有效规则类型";
             return false;
         }
+
+        if (const std::wstring* mode = FindValue(section, L"hotkeymode"); mode != nullptr) {
+            if (!ParseHotkeyMode(*mode, rule.hotkeyPolicy.mode)) {
+                error = section.name + L".HotkeyMode 不是有效快捷键策略";
+                return false;
+            }
+        } else if (!legacyConfig) {
+            rule.hotkeyPolicy.mode = HotkeyMode::BlockAll;
+        }
+
+        std::vector<std::pair<int, HotkeySpec>> indexedHotkeys;
+        for (const auto& [key, value] : section.values) {
+            int hotkeyIndex = 0;
+            if (!ParseHotkeyIndex(key, hotkeyIndex)) {
+                continue;
+            }
+
+            HotkeySpec hotkey;
+            if (!ParseHotkeySpec(value, hotkey)) {
+                error = section.name + L"." + key + L" 不是有效快捷键";
+                return false;
+            }
+            indexedHotkeys.push_back({hotkeyIndex, hotkey});
+        }
+        std::sort(indexedHotkeys.begin(), indexedHotkeys.end(),
+                  [](const auto& left, const auto& right) { return left.first < right.first; });
+        for (std::size_t hotkeyIndex = 1; hotkeyIndex < indexedHotkeys.size(); ++hotkeyIndex) {
+            if (indexedHotkeys[hotkeyIndex - 1].first == indexedHotkeys[hotkeyIndex].first) {
+                error = section.name + L" 重复定义快捷键序号";
+                return false;
+            }
+        }
+        for (const auto& indexedHotkey : indexedHotkeys) {
+            rule.hotkeyPolicy.hotkeys.push_back(indexedHotkey.second);
+        }
+        NormalizeHotkeyPolicy(rule.hotkeyPolicy);
+        if (!ValidateHotkeyPolicy(rule.hotkeyPolicy)) {
+            error = section.name + L" 的快捷键数量超过限制";
+            return false;
+        }
         indexedRules.push_back({index, std::move(rule)});
     }
 
@@ -488,7 +621,16 @@ bool ConfigStore::Save(const AppConfig& config, std::wstring& error) const {
         return false;
     }
 
-    std::wstring text = SerializeIni(config);
+    AppConfig normalizedConfig = config;
+    for (AppRule& rule : normalizedConfig.apps) {
+        NormalizeHotkeyPolicy(rule.hotkeyPolicy);
+        if (!ValidateHotkeyPolicy(rule.hotkeyPolicy)) {
+            error = L"配置包含无效快捷键策略或快捷键数量超过限制";
+            return false;
+        }
+    }
+
+    std::wstring text = SerializeIni(normalizedConfig);
     std::string bytes;
     if (!WideToUtf8(text, bytes, error)) {
         return false;

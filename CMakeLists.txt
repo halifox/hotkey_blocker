@@ -49,6 +49,7 @@ add_executable(hkb WIN32
         src/BlockerService.cpp
         src/ConfigStore.cpp
         src/Injector.cpp
+        src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
         src/PathUtils.cpp
         src/ProcessMonitor.cpp
@@ -79,8 +80,9 @@ add_library(hotkey_hook SHARED
         hook/HookMain.cpp
         hook/RegisterHotKeyHook.cpp
 )
-target_include_directories(hotkey_hook PRIVATE hook)
+target_include_directories(hotkey_hook PRIVATE hook src)
 hkb_configure_target(hotkey_hook)
+target_sources(hotkey_hook PRIVATE src/HotkeyPolicyTransport.cpp)
 target_link_libraries(hotkey_hook PRIVATE detours user32)
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -153,6 +155,7 @@ if (HKB_BUILD_TESTS)
                 src/ArchitectureDetector.cpp
                 src/BlockerService.cpp
                 src/Injector.cpp
+                src/HotkeyPolicyTransport.cpp
                 src/Logger.cpp
                 src/PathUtils.cpp
                 src/ProcessMonitor.cpp

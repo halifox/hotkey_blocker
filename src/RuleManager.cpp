@@ -122,6 +122,32 @@ bool RuleManager::SetEnabled(const std::wstring& path, bool enabled) {
     return SaveAfterChange(previousConfig);
 }
 
+bool RuleManager::SetHotkeyPolicy(const std::wstring& path, HotkeyPolicy policy) {
+    const std::wstring normalizedPath = PathUtils::NormalizePath(path);
+    if (normalizedPath.empty()) {
+        m_lastError = L"规则路径无效";
+        return false;
+    }
+    NormalizeHotkeyPolicy(policy);
+    if (!ValidateHotkeyPolicy(policy)) {
+        m_lastError = L"快捷键策略无效或快捷键数量超过限制";
+        return false;
+    }
+
+    const auto iterator = FindRuleByPath(m_config.apps, normalizedPath);
+    if (iterator == m_config.apps.end()) {
+        m_lastError = L"未找到要修改的规则";
+        return false;
+    }
+    if (SameHotkeyPolicy(iterator->hotkeyPolicy, policy)) {
+        return true;
+    }
+
+    const AppConfig previousConfig = m_config;
+    iterator->hotkeyPolicy = std::move(policy);
+    return SaveAfterChange(previousConfig);
+}
+
 const std::vector<AppRule>& RuleManager::Rules() const noexcept {
     return m_config.apps;
 }

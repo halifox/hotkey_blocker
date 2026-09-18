@@ -48,11 +48,23 @@ bool BlockerService::Start(const std::vector<AppRule>& rules) {
         m_injectionStopRequested = false;
     }
 
+    std::wstring policyError;
+    if (!m_policyRegistry.Start(policyError)) {
+        std::lock_guard lock(m_mutex);
+        m_started = false;
+        m_runtimeRules.clear();
+        m_serviceError = policyError.empty() ? L"快捷键策略共享内存启动失败" : policyError;
+        Log(m_serviceError);
+        return false;
+    }
+
     try {
         m_injectionThread = std::thread(&BlockerService::RunInjectionWorker, this);
     } catch (...) {
+        m_policyRegistry.Stop();
         std::lock_guard lock(m_mutex);
         m_started = false;
+        m_runtimeRules.clear();
         m_serviceError = L"注入线程启动失败";
         Log(m_serviceError);
         return false;
@@ -60,6 +72,7 @@ bool BlockerService::Start(const std::vector<AppRule>& rules) {
 
     if (!m_monitor.Start([this](const ProcessEvent& event) { OnProcessEvent(event); })) {
         StopInjectionWorker();
+        m_policyRegistry.Stop();
         {
             std::lock_guard lock(m_mutex);
             m_started = false;
@@ -88,6 +101,7 @@ void BlockerService::StopInjectionWorker() {
 void BlockerService::Stop() {
     m_monitor.Stop();
     StopInjectionWorker();
+    m_policyRegistry.Stop();
 
     bool wasStarted = false;
     {
@@ -122,6 +136,12 @@ void BlockerService::UpdateRules(const std::vector<AppRule>& rules) {
                 });
             if (oldRule != m_runtimeRules.end()) {
                 runtime.processes = oldRule->processes;
+                if (!SameHotkeyPolicy(oldRule->rule.hotkeyPolicy, rule.hotkeyPolicy)) {
+                    for (TrackedProcess& process : runtime.processes) {
+                        process.protection = ProcessProtection::Observed;
+                        process.detail = L"快捷键策略已变更，请重启应用";
+                    }
+                }
             }
             updatedRules.push_back(std::move(runtime));
         }
@@ -188,6 +208,7 @@ void BlockerService::OnProcessEvent(const ProcessEvent& event) {
                 removed = removed || oldSize != runtime.processes.size();
             }
         }
+        m_policyRegistry.Remove(event.process.pid);
         if (removed) {
             Log(L"目标进程退出 PID=" + std::to_wstring(event.process.pid));
             NotifyStateChanged();
@@ -265,19 +286,34 @@ void BlockerService::RunInjectionWorker() {
         }
 
         bool enabled = false;
+        HotkeyPolicy policy;
         {
             std::lock_guard lock(m_mutex);
             const int ruleIndex = FindRuleIndexLocked(event.process.imagePath);
-            enabled = ruleIndex >= 0 && m_runtimeRules[static_cast<std::size_t>(ruleIndex)]
-                                             .rule.enabled &&
-                      m_started && m_serviceError.empty();
+            if (ruleIndex >= 0) {
+                const RuntimeRule& runtime =
+                    m_runtimeRules[static_cast<std::size_t>(ruleIndex)];
+                enabled = runtime.rule.enabled && m_started && m_serviceError.empty();
+                policy = runtime.rule.hotkeyPolicy;
+            }
         }
         if (!enabled || !ProcessMonitor::IsProcessAlive(event.process)) {
             continue;
         }
 
+        std::wstring policyError;
+        if (!m_policyRegistry.Publish(event.process.pid, policy, policyError)) {
+            InjectionResult injection;
+            injection.error = policyError.empty() ? L"发布快捷键策略失败" : policyError;
+            ApplyInjectionResult(event, injection);
+            continue;
+        }
+
         Log(L"开始注入 PID=" + std::to_wstring(event.process.pid));
         const InjectionResult injection = m_injector.Inject(event.process.pid);
+        if (!injection.success) {
+            m_policyRegistry.Remove(event.process.pid);
+        }
         ApplyInjectionResult(event, injection);
     }
 }

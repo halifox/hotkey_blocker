@@ -23,7 +23,8 @@ bool SameConfig(const AppConfig& left, const AppConfig& right) {
         if (left.apps[index].path != right.apps[index].path ||
             left.apps[index].enabled != right.apps[index].enabled ||
             left.apps[index].displayName != right.apps[index].displayName ||
-            left.apps[index].kind != right.apps[index].kind) {
+            left.apps[index].kind != right.apps[index].kind ||
+            !SameHotkeyPolicy(left.apps[index].hotkeyPolicy, right.apps[index].hotkeyPolicy)) {
             return false;
         }
     }
@@ -54,6 +55,11 @@ int wmain() {
     folderRule.path = temporaryDirectory;
     folderRule.displayName = L"测试文件夹";
     folderRule.kind = RuleKind::Directory;
+    folderRule.hotkeyPolicy.mode = HotkeyMode::Whitelist;
+    folderRule.hotkeyPolicy.hotkeys = {
+        {HotkeyPolicyConstants::kModifierControl | HotkeyPolicyConstants::kModifierAlt, 'A'},
+        {HotkeyPolicyConstants::kModifierControl, 0x7b},
+    };
     expected.apps.push_back(folderRule);
 
     ConfigStore store(configPath);
@@ -101,12 +107,22 @@ int wmain() {
     passed = Check(manager.AddRule(executableRule), L"添加规则并立即保存") && passed;
     passed = Check(!manager.AddRule(executableRule), L"拒绝重复规则") && passed;
     passed = Check(manager.SetEnabled(modulePathBuffer, false), L"保存停用状态") && passed;
+    HotkeyPolicy policy;
+    policy.mode = HotkeyMode::Blacklist;
+    policy.hotkeys = {
+        {HotkeyPolicyConstants::kModifierControl | HotkeyPolicyConstants::kModifierAlt, 'A'}};
+    passed = Check(manager.SetHotkeyPolicy(modulePathBuffer, policy), L"保存快捷键策略") && passed;
 
     RuleManager reloaded{ConfigStore(managerConfigPath)};
     passed = Check(reloaded.Load(), L"重新加载规则") && passed;
     passed = Check(reloaded.Rules().size() == 1 && !reloaded.Rules().front().enabled,
                    L"规则状态持久化") &&
              passed;
+    passed = Check(reloaded.Rules().front().hotkeyPolicy.mode == HotkeyMode::Blacklist &&
+                       reloaded.Rules().front().hotkeyPolicy.hotkeys.size() == 1 &&
+                       reloaded.Rules().front().hotkeyPolicy.hotkeys.front().virtualKey == 'A',
+                   L"快捷键策略持久化") &&
+              passed;
     passed = Check(reloaded.Remove(modulePathBuffer), L"删除规则并立即保存") && passed;
     passed = Check(reloaded.Rules().empty(), L"删除后规则为空") && passed;
 

@@ -1,22 +1,39 @@
 #include "RegisterHotKeyHook.h"
 
+#include "HotkeyPolicyTransport.h"
+
 #include <detours.h>
+
+#include <mutex>
+#include <utility>
 
 namespace {
 
 RegisterHotKeyFunction g_realRegisterHotKey = nullptr;
 bool g_hookInstalled = false;
+HotkeyPolicy g_hotkeyPolicy;
+std::once_flag g_hotkeyPolicyOnce;
 
 }  // namespace
 
+void LoadHotkeyPolicy() {
+    HotkeyPolicy loaded;
+    if (LoadHotkeyPolicyForCurrentProcess(loaded)) {
+        g_hotkeyPolicy = std::move(loaded);
+    } else {
+        g_hotkeyPolicy.mode = HotkeyMode::BlockAll;
+        g_hotkeyPolicy.hotkeys.clear();
+    }
+}
+
 extern "C" BOOL WINAPI HookRegisterHotKey(HWND window, int identifier, UINT modifiers,
                                            UINT virtualKey) {
-    (void)window;
-    (void)identifier;
-    (void)modifiers;
-    (void)virtualKey;
-    SetLastError(ERROR_ACCESS_DENIED);
-    return FALSE;
+    std::call_once(g_hotkeyPolicyOnce, LoadHotkeyPolicy);
+    if (ShouldBlockHotkey(g_hotkeyPolicy, {modifiers, virtualKey})) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return g_realRegisterHotKey(window, identifier, modifiers, virtualKey);
 }
 
 bool InstallRegisterHotKeyHook() {
