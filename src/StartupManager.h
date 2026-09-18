@@ -4,6 +4,7 @@
 
 class StartupManager final {
 public:
+    bool GetEnabled(bool& enabled, std::wstring& error) const;
     bool SetEnabled(bool enabled, std::wstring& error) const;
 
 private:

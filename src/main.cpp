@@ -27,7 +27,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <filesystem>
 #include <iterator>
 #include <string>
 #include <unordered_map>
@@ -35,6 +34,7 @@
 
 #include "BlockerService.h"
 #include "Logger.h"
+#include "PathUtils.h"
 #include "RuleManager.h"
 #include "StartupManager.h"
 #include "resource.h"
@@ -84,13 +84,11 @@ public:
 
 private:
     struct DisplayRow {
-        std::wstring key;
         std::wstring path;
-        std::wstring enabled;
+        bool enabled = false;
         std::wstring status;
         std::wstring detail;
         int imageIndex = -1;
-        bool isRule = false;
     };
 
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
@@ -112,15 +110,14 @@ private:
         }
         m_logger.Info(L"加载规则：" + std::to_wstring(m_ruleManager.Rules().size()) + L" 条");
 
-        ::CheckDlgButton(m_hWnd, IDC_AUTOSTART,
-                         m_ruleManager.AutoStart() ? BST_CHECKED : BST_UNCHECKED);
+        bool autoStartEnabled = false;
         std::wstring startupError;
-        if (!m_startupManager.SetEnabled(m_ruleManager.AutoStart(), startupError)) {
+        if (!m_startupManager.GetEnabled(autoStartEnabled, startupError)) {
             m_logger.Error(startupError);
-            if (m_ruleManager.AutoStart()) {
-                ShowError(L"设置开机启动失败", startupError);
-            }
+            ShowError(L"读取开机启动设置失败", startupError);
         }
+        ::CheckDlgButton(m_hWnd, IDC_AUTOSTART,
+                         autoStartEnabled ? BST_CHECKED : BST_UNCHECKED);
 
         m_blockerService.SetStateChangedCallback([this] { QueueStateRefresh(); });
         if (!m_blockerService.Start(m_ruleManager.Rules())) {
@@ -341,8 +338,6 @@ private:
         if (m_listView == nullptr) {
             return;
         }
-        const LONG_PTR listViewStyle = ::GetWindowLongPtrW(m_listView, GWL_STYLE);
-        ::SetWindowLongPtrW(m_listView, GWL_STYLE, listViewStyle | LVS_NOSCROLL);
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
                             LVS_EX_LABELTIP | LVS_EX_INFOTIP);
@@ -425,7 +420,7 @@ private:
         std::wstring selectedKey;
         const int selectedIndex = ListView_GetNextItem(m_listView, -1, LVNI_SELECTED);
         if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedRows.size())) {
-            selectedKey = m_renderedRows[static_cast<std::size_t>(selectedIndex)].key;
+            selectedKey = m_renderedRows[static_cast<std::size_t>(selectedIndex)].path;
         }
 
         SendMessageW(m_listView, WM_SETREDRAW, FALSE, 0);
@@ -438,7 +433,7 @@ private:
 
         if (!selectedKey.empty()) {
             for (std::size_t index = 0; index < rows.size(); ++index) {
-                if (rows[index].key != selectedKey) {
+                if (!PathUtils::SamePath(rows[index].path, selectedKey)) {
                     continue;
                 }
                 LVITEMW item{};
@@ -453,31 +448,34 @@ private:
     }
 
     std::vector<DisplayRow> BuildDisplayRows() const {
+        const std::vector<AppRule>& rules = m_ruleManager.Rules();
         const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
         std::vector<DisplayRow> rows;
-        rows.reserve(states.size());
+        rows.reserve(rules.size());
 
-        for (const RuntimeRuleState& state : states) {
+        for (const AppRule& rule : rules) {
             DisplayRow row;
-            row.key = state.rule.path;
-            row.path = state.rule.path;
-            row.enabled = state.rule.enabled ? L"是" : L"否";
-            row.status = AppStatusText(state.status);
-            row.detail = state.detail;
-            row.imageIndex = FileIconIndex(state.rule.path);
-            if (state.rule.targets.size() > 1) {
-                if (!row.detail.empty()) {
-                    row.detail += L"；";
-                }
-                row.detail += L"目标进程 " + std::to_wstring(state.rule.targets.size()) + L" 个";
+            row.path = rule.path;
+            row.enabled = rule.enabled;
+            row.status = AppStatusText(AppStatus::Waiting);
+            row.imageIndex = FileIconIndex(rule.path);
+            if (rule.kind == RuleKind::Directory) {
+                row.detail = L"拦截文件夹内所有 EXE";
             }
-            if (state.rule.recursive) {
-                if (!row.detail.empty()) {
-                    row.detail += L"；";
+
+            const auto state = std::find_if(
+                states.begin(), states.end(), [&rule](const RuntimeRuleState& candidate) {
+                    return PathUtils::SamePath(candidate.path, rule.path);
+                });
+            if (state != states.end()) {
+                row.status = AppStatusText(state->status);
+                if (!state->detail.empty()) {
+                    if (!row.detail.empty()) {
+                        row.detail += L"；";
+                    }
+                    row.detail += state->detail;
                 }
-                row.detail += L"拦截文件夹内所有 EXE";
             }
-            row.isRule = true;
             rows.push_back(std::move(row));
         }
         return rows;
@@ -489,12 +487,11 @@ private:
             return false;
         }
         for (std::size_t index = 0; index < left.size(); ++index) {
-            if (left[index].key != right[index].key || left[index].path != right[index].path ||
+            if (left[index].path != right[index].path ||
                 left[index].enabled != right[index].enabled ||
                 left[index].status != right[index].status ||
                 left[index].detail != right[index].detail ||
-                left[index].imageIndex != right[index].imageIndex ||
-                left[index].isRule != right[index].isRule) {
+                left[index].imageIndex != right[index].imageIndex) {
                 return false;
             }
         }
@@ -508,7 +505,8 @@ private:
         item.iImage = row.imageIndex;
         item.pszText = const_cast<LPWSTR>(row.path.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(row.enabled.c_str()));
+        const wchar_t* enabled = row.enabled ? L"是" : L"否";
+        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(enabled));
         SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.status.c_str()));
     }
 
@@ -622,7 +620,6 @@ private:
         AppRule rule;
         rule.path = std::move(path);
         rule.enabled = true;
-        rule.source = AppSource::Manual;
         if (!m_ruleManager.AddRule(std::move(rule))) {
             ShowError(L"添加应用失败", m_ruleManager.LastError());
             return;
@@ -639,13 +636,8 @@ private:
 
         AppRule rule;
         rule.path = std::move(path);
-        rule.displayName = std::filesystem::path(rule.path).filename().wstring();
-        if (rule.displayName.empty()) {
-            rule.displayName = rule.path;
-        }
         rule.enabled = true;
-        rule.source = AppSource::Manual;
-        rule.recursive = true;
+        rule.kind = RuleKind::Directory;
         if (!m_ruleManager.AddRule(std::move(rule))) {
             ShowError(L"添加文件夹失败", m_ruleManager.LastError());
             return;
@@ -656,8 +648,7 @@ private:
 
     void DeleteSelectedApplication() {
         const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size()) ||
-            !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
             ShowError(L"删除应用失败", L"请先选择一个应用");
             return;
         }
@@ -679,14 +670,13 @@ private:
 
     void ToggleSelectedApplication() {
         const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size()) ||
-            !m_renderedRows[static_cast<std::size_t>(index)].isRule) {
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
             ShowError(L"修改应用状态失败", L"请先选择一个应用");
             return;
         }
 
         const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
-        if (!m_ruleManager.SetEnabled(row.path, row.enabled != L"是")) {
+        if (!m_ruleManager.SetEnabled(row.path, !row.enabled)) {
             ShowError(L"修改应用状态失败", m_ruleManager.LastError());
             return;
         }
@@ -711,17 +701,9 @@ private:
 
     void UpdateAutoStart() {
         const bool enabled = ::IsDlgButtonChecked(m_hWnd, IDC_AUTOSTART) == BST_CHECKED;
-        const bool previous = m_ruleManager.AutoStart();
-        if (!m_ruleManager.SetAutoStart(enabled)) {
-            ::CheckDlgButton(m_hWnd, IDC_AUTOSTART, previous ? BST_CHECKED : BST_UNCHECKED);
-            ShowError(L"保存开机启动设置失败", m_ruleManager.LastError());
-            return;
-        }
-
         std::wstring error;
         if (!m_startupManager.SetEnabled(enabled, error)) {
-            m_ruleManager.SetAutoStart(previous);
-            ::CheckDlgButton(m_hWnd, IDC_AUTOSTART, previous ? BST_CHECKED : BST_UNCHECKED);
+            ::CheckDlgButton(m_hWnd, IDC_AUTOSTART, enabled ? BST_UNCHECKED : BST_CHECKED);
             m_logger.Error(error);
             ShowError(L"设置开机启动失败", error);
         }
@@ -733,6 +715,7 @@ private:
             case AppStatus::PartiallyBlocked:
             case AppStatus::InjectionFailed:
             case AppStatus::PathMissing:
+            case AppStatus::MonitoringUnavailable:
                 return true;
             case AppStatus::Waiting:
             case AppStatus::Injecting:
@@ -750,12 +733,12 @@ private:
             if (!IsActionableStatus(state.status)) {
                 continue;
             }
-            current[state.rule.path] = state.status;
+            current[state.path] = state.status;
             if (!m_trayIconAdded) {
                 continue;
             }
 
-            const auto previous = m_notifiedActionableStates.find(state.rule.path);
+            const auto previous = m_notifiedActionableStates.find(state.path);
             if (previous != m_notifiedActionableStates.end() &&
                 previous->second == state.status) {
                 continue;
@@ -765,10 +748,17 @@ private:
             if (!state.detail.empty()) {
                 message += L"：" + state.detail;
             }
-            ShowTrayNotification(state.rule.displayName.empty() ? L"应用状态提醒"
-                                                                 : state.rule.displayName,
-                                 message);
-            m_notifiedActionableStates[state.rule.path] = state.status;
+            std::wstring title = L"应用状态提醒";
+            const auto rule = std::find_if(
+                m_ruleManager.Rules().begin(), m_ruleManager.Rules().end(),
+                [&state](const AppRule& candidate) {
+                    return PathUtils::SamePath(candidate.path, state.path);
+                });
+            if (rule != m_ruleManager.Rules().end() && !rule->displayName.empty()) {
+                title = rule->displayName;
+            }
+            ShowTrayNotification(title, message);
+            m_notifiedActionableStates[state.path] = state.status;
         }
 
         for (auto iterator = m_notifiedActionableStates.begin();

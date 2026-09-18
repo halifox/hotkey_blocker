@@ -1,5 +1,7 @@
 #include "ConfigStore.h"
 
+#include "Win32Support.h"
+
 #include <windows.h>
 #include <shlobj.h>
 
@@ -42,29 +44,6 @@ std::wstring AsciiLower(std::wstring value) {
         return character;
     });
     return value;
-}
-
-std::wstring Win32Error(const wchar_t* operation) {
-    const DWORD errorCode = GetLastError();
-    LPWSTR messageBuffer = nullptr;
-    const DWORD messageLength = FormatMessageW(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-            FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr, errorCode, 0, reinterpret_cast<LPWSTR>(&messageBuffer), 0, nullptr);
-
-    std::wstring message(operation);
-    message += L" 失败";
-    if (messageLength != 0 && messageBuffer != nullptr) {
-        message += L"：";
-        message += Trim(std::wstring(messageBuffer, messageLength));
-    } else {
-        message += L"（错误码 " + std::to_wstring(errorCode) + L"）";
-    }
-
-    if (messageBuffer != nullptr) {
-        LocalFree(messageBuffer);
-    }
-    return message;
 }
 
 bool Utf8ToWide(const std::string& input, std::wstring& output, std::wstring& error) {
@@ -162,16 +141,6 @@ bool ParseBoolean(const std::wstring& text, bool& value) {
     return false;
 }
 
-bool ParseSource(const std::wstring& text, AppSource& value) {
-    int parsed = 0;
-    if (!ParseInteger(text, parsed) || parsed < static_cast<int>(AppSource::Manual) ||
-        parsed > static_cast<int>(AppSource::Portable)) {
-        return false;
-    }
-    value = static_cast<AppSource>(parsed);
-    return true;
-}
-
 bool ParsePositiveIndex(const std::wstring& text, int& value) {
     const std::wstring trimmed = Trim(text);
     if (trimmed.empty()) {
@@ -248,7 +217,11 @@ bool ParseIni(const std::wstring& text, std::vector<IniSection>& sections,
             error = L"配置文件第 " + std::to_wstring(lineNumber) + L" 行的键为空";
             return false;
         }
-        current->values[key] = Trim(trimmed.substr(separator + 1));
+        if (current->values.find(key) != current->values.end()) {
+            error = L"配置文件第 " + std::to_wstring(lineNumber) + L" 行重复定义键 " + key;
+            return false;
+        }
+        current->values.emplace(key, Trim(trimmed.substr(separator + 1)));
     }
     return true;
 }
@@ -278,14 +251,14 @@ bool ReadFileBytes(const std::filesystem::path& path, std::string& bytes, std::w
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         systemError = GetLastError();
-        error = Win32Error(L"读取配置文件");
+        error = Win32Support::ErrorMessage(L"读取配置文件", systemError);
         return false;
     }
 
     LARGE_INTEGER size{};
     if (!GetFileSizeEx(file, &size)) {
         systemError = GetLastError();
-        error = Win32Error(L"获取配置文件大小");
+        error = Win32Support::ErrorMessage(L"获取配置文件大小", systemError);
         CloseHandle(file);
         return false;
     }
@@ -304,7 +277,7 @@ bool ReadFileBytes(const std::filesystem::path& path, std::string& bytes, std::w
         DWORD read = 0;
         if (!ReadFile(file, bytes.data() + offset, request, &read, nullptr)) {
             systemError = GetLastError();
-            error = Win32Error(L"读取配置文件");
+            error = Win32Support::ErrorMessage(L"读取配置文件", systemError);
             CloseHandle(file);
             return false;
         }
@@ -326,7 +299,7 @@ bool WriteFileBytes(const std::filesystem::path& path, const std::string& bytes,
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        error = Win32Error(L"创建临时配置文件");
+        error = Win32Support::ErrorMessage(L"创建临时配置文件");
         return false;
     }
 
@@ -336,7 +309,7 @@ bool WriteFileBytes(const std::filesystem::path& path, const std::string& bytes,
             bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
         DWORD written = 0;
         if (!WriteFile(file, bytes.data() + offset, request, &written, nullptr)) {
-            error = Win32Error(L"写入临时配置文件");
+            error = Win32Support::ErrorMessage(L"写入临时配置文件");
             CloseHandle(file);
             return false;
         }
@@ -349,13 +322,13 @@ bool WriteFileBytes(const std::filesystem::path& path, const std::string& bytes,
     }
 
     if (!FlushFileBuffers(file)) {
-        error = Win32Error(L"刷新临时配置文件");
+        error = Win32Support::ErrorMessage(L"刷新临时配置文件");
         CloseHandle(file);
         return false;
     }
 
     if (!CloseHandle(file)) {
-        error = Win32Error(L"关闭临时配置文件");
+        error = Win32Support::ErrorMessage(L"关闭临时配置文件");
         return false;
     }
     return true;
@@ -366,46 +339,18 @@ std::wstring SerializeIni(const AppConfig& config) {
     output.reserve(256 + config.apps.size() * 240);
     output += L"[Settings]\r\n";
     output += L"Version=" + std::to_wstring(config.version) + L"\r\n";
-    output += L"AutoStart=" + std::to_wstring(config.autoStart ? 1 : 0) + L"\r\n";
 
     for (std::size_t index = 0; index < config.apps.size(); ++index) {
-        std::vector<std::wstring> targets;
-        const auto addTarget = [&targets](const std::wstring& target) {
-            if (target.empty()) {
-                return;
-            }
-            const auto duplicate = std::find_if(
-                targets.begin(), targets.end(), [&target](const std::wstring& existing) {
-                    return CompareStringOrdinal(existing.c_str(), -1, target.c_str(), -1, TRUE) ==
-                           CSTR_EQUAL;
-                });
-            if (duplicate == targets.end()) {
-                targets.push_back(target);
-            }
-        };
-        if (!config.apps[index].recursive) {
-            addTarget(config.apps[index].path);
-            for (const std::wstring& target : config.apps[index].targets) {
-                addTarget(target);
-            }
-        }
-
         output += L"\r\n[App." + std::to_wstring(index + 1) + L"]\r\n";
         if (!config.apps[index].displayName.empty()) {
             output += L"Name=" + config.apps[index].displayName + L"\r\n";
         }
         output += L"Path=" + config.apps[index].path + L"\r\n";
         output += L"Enabled=" + std::to_wstring(config.apps[index].enabled ? 1 : 0) + L"\r\n";
-        output += L"Source=" +
-                  std::to_wstring(static_cast<int>(config.apps[index].source)) + L"\r\n";
-        if (config.apps[index].recursive) {
-            output += L"Recursive=1\r\n";
-        }
-        output += L"TargetCount=" + std::to_wstring(targets.size()) + L"\r\n";
-        for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
-            output += L"Target" + std::to_wstring(targetIndex + 1) + L"=" +
-                      targets[targetIndex] + L"\r\n";
-        }
+        output += L"Kind=" +
+                  std::wstring(config.apps[index].kind == RuleKind::Directory ? L"directory"
+                                                                                : L"executable") +
+                  L"\r\n";
     }
     return output;
 }
@@ -445,25 +390,30 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         return false;
     }
 
+    bool settingsFound = false;
     for (const IniSection& section : sections) {
         if (!IsSection(section, L"settings")) {
             continue;
         }
 
-        if (const std::wstring* version = FindValue(section, L"version"); version != nullptr) {
-            if (!ParseInteger(*version, config.version)) {
-                error = L"Settings.Version 不是有效整数";
-                return false;
-            }
+        if (settingsFound) {
+            error = L"配置文件重复定义 Settings 节";
+            return false;
         }
-        if (const std::wstring* autoStart = FindValue(section, L"autostart");
-            autoStart != nullptr && !ParseBoolean(*autoStart, config.autoStart)) {
-            error = L"Settings.AutoStart 不是有效布尔值";
+        settingsFound = true;
+
+        const std::wstring* version = FindValue(section, L"version");
+        if (version == nullptr || !ParseInteger(*version, config.version)) {
+            error = L"Settings.Version 不是有效整数";
             return false;
         }
     }
 
-    if (config.version != 1 && config.version != kCurrentVersion) {
+    if (!settingsFound) {
+        error = L"配置文件缺少 Settings 节";
+        return false;
+    }
+    if (config.version != kCurrentVersion) {
         error = L"配置版本不受支持：" + std::to_wstring(config.version);
         return false;
     }
@@ -495,38 +445,19 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
             error = section.name + L".Enabled 不是有效布尔值";
             return false;
         }
-        if (config.version >= kCurrentVersion) {
-            if (const std::wstring* source = FindValue(section, L"source");
-                source != nullptr && !ParseSource(*source, rule.source)) {
-                error = section.name + L".Source 不是有效来源类型";
-                return false;
-            }
-            if (const std::wstring* recursive = FindValue(section, L"recursive");
-                recursive != nullptr && !ParseBoolean(*recursive, rule.recursive)) {
-                error = section.name + L".Recursive 不是有效布尔值";
-                return false;
-            }
-
-            int targetCount = 0;
-            if (const std::wstring* count = FindValue(section, L"targetcount");
-                count != nullptr) {
-                if (!ParseInteger(*count, targetCount) || targetCount < 0 || targetCount > 256) {
-                    error = section.name + L".TargetCount 不是有效数量";
-                    return false;
-                }
-            }
-            for (int targetIndex = 1; targetIndex <= targetCount; ++targetIndex) {
-                const std::wstring key = L"target" + std::to_wstring(targetIndex);
-                const std::wstring* target = FindValue(section, key);
-                if (target == nullptr || target->empty()) {
-                    error = section.name + L" 缺少 " + key;
-                    return false;
-                }
-                rule.targets.push_back(*target);
-            }
+        const std::wstring* kind = FindValue(section, L"kind");
+        if (kind == nullptr) {
+            error = section.name + L" 缺少 Kind";
+            return false;
         }
-        if (!rule.recursive && rule.targets.empty()) {
-            rule.targets.push_back(rule.path);
+        const std::wstring normalizedKind = AsciiLower(Trim(*kind));
+        if (normalizedKind == L"executable") {
+            rule.kind = RuleKind::Executable;
+        } else if (normalizedKind == L"directory") {
+            rule.kind = RuleKind::Directory;
+        } else {
+            error = section.name + L".Kind 不是有效规则类型";
+            return false;
         }
         indexedRules.push_back({index, std::move(rule)});
     }
@@ -535,6 +466,12 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
                      [](const IndexedRule& left, const IndexedRule& right) {
                          return left.index < right.index;
                      });
+    for (std::size_t index = 1; index < indexedRules.size(); ++index) {
+        if (indexedRules[index - 1].index == indexedRules[index].index) {
+            error = L"配置文件重复定义 App." + std::to_wstring(indexedRules[index].index);
+            return false;
+        }
+    }
     config.apps.reserve(indexedRules.size());
     for (IndexedRule& indexedRule : indexedRules) {
         config.apps.push_back(std::move(indexedRule.rule));
@@ -580,7 +517,7 @@ bool ConfigStore::Save(const AppConfig& config, std::wstring& error) const {
 
     if (!MoveFileExW(temporaryPath.c_str(), m_path.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        error = Win32Error(L"替换配置文件");
+        error = Win32Support::ErrorMessage(L"替换配置文件");
         DeleteFileW(temporaryPath.c_str());
         return false;
     }

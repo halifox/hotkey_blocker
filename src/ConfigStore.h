@@ -5,10 +5,9 @@
 #include <utility>
 #include <vector>
 
-enum class AppSource {
-    Manual = 0,
-    Installed = 1,
-    Portable = 2,
+enum class RuleKind {
+    Executable,
+    Directory,
 };
 
 struct AppRule {
@@ -19,20 +18,17 @@ struct AppRule {
     std::wstring path;
     bool enabled = true;
     std::wstring displayName;
-    std::vector<std::wstring> targets;
-    AppSource source = AppSource::Manual;
-    bool recursive = false;
+    RuleKind kind = RuleKind::Executable;
 };
 
 struct AppConfig {
-    int version = 2;
-    bool autoStart = false;
+    int version = 1;
     std::vector<AppRule> apps;
 };
 
 class ConfigStore final {
 public:
-    static constexpr int kCurrentVersion = 2;
+    static constexpr int kCurrentVersion = 1;
 
     ConfigStore();
     explicit ConfigStore(std::filesystem::path path);

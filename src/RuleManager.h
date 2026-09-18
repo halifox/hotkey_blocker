@@ -14,15 +14,11 @@ public:
     bool Load();
     bool Save();
 
-    bool Add(const std::wstring& path);
     bool AddRule(AppRule rule);
     bool Remove(const std::wstring& path);
     bool SetEnabled(const std::wstring& path, bool enabled);
-    bool AutoStart() const noexcept;
-    bool SetAutoStart(bool enabled);
 
     const std::vector<AppRule>& Rules() const noexcept;
-    const std::filesystem::path& ConfigPath() const noexcept;
     const std::wstring& LastError() const noexcept;
 
 private:

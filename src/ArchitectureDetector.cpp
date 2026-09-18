@@ -1,33 +1,12 @@
 #include "ArchitectureDetector.h"
+#include "Win32Support.h"
 
 #include <windows.h>
-
-#include <iterator>
-#include <utility>
 
 namespace {
 
 using IsWow64Process2Function = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
 using IsWow64ProcessFunction = BOOL(WINAPI*)(HANDLE, PBOOL);
-
-std::wstring Win32Error(const wchar_t* operation) {
-    const DWORD errorCode = GetLastError();
-    wchar_t buffer[256]{};
-    const DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM |
-                                           FORMAT_MESSAGE_IGNORE_INSERTS,
-                                       nullptr, errorCode, 0, buffer,
-                                       static_cast<DWORD>(std::size(buffer)), nullptr);
-    if (length == 0) {
-        return std::wstring(operation) + L"（错误码 " + std::to_wstring(errorCode) + L"）";
-    }
-    std::wstring result(operation);
-    result += L"：";
-    result.append(buffer, length);
-    while (!result.empty() && (result.back() == L'\r' || result.back() == L'\n')) {
-        result.pop_back();
-    }
-    return result;
-}
 
 }  // namespace
 
@@ -35,7 +14,7 @@ ArchitectureResult DetectProcessArchitecture(DWORD pid) {
     ArchitectureResult result;
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (process == nullptr) {
-        result.error = Win32Error(L"打开目标进程失败");
+        result.error = Win32Support::ErrorMessage(L"打开目标进程失败");
         return result;
     }
 
@@ -48,7 +27,7 @@ ArchitectureResult DetectProcessArchitecture(DWORD pid) {
         USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
         USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
         if (!isWow64Process2(process, &processMachine, &nativeMachine)) {
-            result.error = Win32Error(L"检测目标进程架构失败");
+            result.error = Win32Support::ErrorMessage(L"检测目标进程架构失败");
             CloseHandle(process);
             return result;
         }
@@ -82,7 +61,7 @@ ArchitectureResult DetectProcessArchitecture(DWORD pid) {
 
     BOOL wow64 = FALSE;
     if (!isWow64Process(process, &wow64)) {
-        result.error = Win32Error(L"检测目标进程架构失败");
+        result.error = Win32Support::ErrorMessage(L"检测目标进程架构失败");
         CloseHandle(process);
         return result;
     }

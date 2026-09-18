@@ -2,109 +2,16 @@
 
 #include "PathUtils.h"
 
-#include <windows.h>
-
 #include <algorithm>
-#include <filesystem>
 #include <utility>
 
 namespace {
 
-bool IsExePath(const std::wstring& path) {
-    const std::wstring extension = std::filesystem::path(path).extension().wstring();
-    if (extension.size() != 4) {
-        return false;
-    }
-    return extension[0] == L'.' && ((extension[1] == L'e' || extension[1] == L'E') &&
-            (extension[2] == L'x' || extension[2] == L'X') &&
-            (extension[3] == L'e' || extension[3] == L'E'));
-}
-
-std::wstring DefaultDisplayName(const std::wstring& path) {
-    std::wstring name = std::filesystem::path(path).stem().wstring();
-    return name.empty() ? std::filesystem::path(path).filename().wstring() : name;
-}
-
-bool ContainsPath(const AppRule& rule, const std::wstring& path) {
-    if (PathUtils::SamePath(rule.path, path)) {
-        return true;
-    }
-    if (rule.recursive && PathUtils::IsPathUnderDirectory(path, rule.path)) {
-        return true;
-    }
-    return std::any_of(rule.targets.begin(), rule.targets.end(), [&path](const std::wstring& target) {
-        return PathUtils::SamePath(target, path);
+const auto FindRuleByPath = [](std::vector<AppRule>& rules, const std::wstring& path) {
+    return std::find_if(rules.begin(), rules.end(), [&path](const AppRule& rule) {
+        return PathUtils::SamePath(rule.path, path);
     });
-}
-
-bool RulesOverlap(const AppRule& left, const AppRule& right) {
-    if (ContainsPath(left, right.path) || ContainsPath(right, left.path)) {
-        return true;
-    }
-    for (const std::wstring& target : left.targets) {
-        if (ContainsPath(right, target)) {
-            return true;
-        }
-    }
-    for (const std::wstring& target : right.targets) {
-        if (ContainsPath(left, target)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool NormalizeRule(AppRule& rule) {
-    if (rule.recursive) {
-        const std::wstring normalizedPath = PathUtils::NormalizePath(rule.path);
-        if (normalizedPath.empty()) {
-            return false;
-        }
-
-        const DWORD attributes = GetFileAttributesW(normalizedPath.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            return false;
-        }
-
-        rule.path = normalizedPath;
-        rule.targets.clear();
-        if (rule.displayName.empty()) {
-            rule.displayName = DefaultDisplayName(rule.path);
-        }
-        return true;
-    }
-
-    std::vector<std::wstring> normalizedTargets;
-    const auto addTarget = [&normalizedTargets](const std::wstring& target) {
-        const std::wstring normalized = PathUtils::NormalizePath(target);
-        if (normalized.empty() || !IsExePath(normalized)) {
-            return;
-        }
-        const auto duplicate = std::find_if(
-            normalizedTargets.begin(), normalizedTargets.end(), [&normalized](const auto& item) {
-                return PathUtils::SamePath(item, normalized);
-            });
-        if (duplicate == normalizedTargets.end()) {
-            normalizedTargets.push_back(normalized);
-        }
-    };
-
-    addTarget(rule.path);
-    for (const std::wstring& target : rule.targets) {
-        addTarget(target);
-    }
-    if (normalizedTargets.empty()) {
-        return false;
-    }
-
-    rule.path = normalizedTargets.front();
-    rule.targets = std::move(normalizedTargets);
-    if (rule.displayName.empty()) {
-        rule.displayName = DefaultDisplayName(rule.path);
-    }
-    return true;
-}
+};
 
 }  // namespace
 
@@ -113,8 +20,9 @@ RuleManager::RuleManager() = default;
 RuleManager::RuleManager(ConfigStore store) : m_store(std::move(store)) {}
 
 bool RuleManager::Load() {
-    AppConfig loadedConfig;
+    m_config = AppConfig{};
     std::wstring error;
+    AppConfig loadedConfig;
     if (!m_store.Load(loadedConfig, error)) {
         m_lastError = std::move(error);
         return false;
@@ -123,17 +31,19 @@ bool RuleManager::Load() {
     std::vector<AppRule> normalizedRules;
     normalizedRules.reserve(loadedConfig.apps.size());
     for (AppRule& rule : loadedConfig.apps) {
-        if (!NormalizeRule(rule)) {
-            continue;
+        if (!PathUtils::NormalizeRule(rule, error)) {
+            m_lastError = std::move(error);
+            return false;
         }
-
         const auto duplicate = std::find_if(
             normalizedRules.begin(), normalizedRules.end(), [&rule](const AppRule& existing) {
-                return RulesOverlap(existing, rule);
+                return PathUtils::Overlaps(existing, rule);
             });
-        if (duplicate == normalizedRules.end()) {
-            normalizedRules.push_back(std::move(rule));
+        if (duplicate != normalizedRules.end()) {
+            m_lastError = L"配置包含重叠规则：" + rule.path;
+            return false;
         }
+        normalizedRules.push_back(std::move(rule));
     }
 
     loadedConfig.apps = std::move(normalizedRules);
@@ -152,25 +62,19 @@ bool RuleManager::Save() {
     return true;
 }
 
-bool RuleManager::Add(const std::wstring& path) {
-    AppRule rule;
-    rule.path = path;
-    rule.source = AppSource::Portable;
-    return AddRule(std::move(rule));
-}
-
 bool RuleManager::AddRule(AppRule rule) {
-    if (!NormalizeRule(rule)) {
-        m_lastError = L"只能添加有效的 .exe 文件或文件夹";
+    std::wstring error;
+    if (!PathUtils::NormalizeRule(rule, error)) {
+        m_lastError = std::move(error);
         return false;
     }
 
     const auto duplicate = std::find_if(
         m_config.apps.begin(), m_config.apps.end(), [&rule](const AppRule& existing) {
-            return RulesOverlap(existing, rule);
+            return PathUtils::Overlaps(existing, rule);
         });
     if (duplicate != m_config.apps.end()) {
-        m_lastError = L"该应用或目标进程已经添加";
+        m_lastError = L"该应用或文件夹已经添加";
         return false;
     }
 
@@ -181,12 +85,14 @@ bool RuleManager::AddRule(AppRule rule) {
 
 bool RuleManager::Remove(const std::wstring& path) {
     const std::wstring normalizedPath = PathUtils::NormalizePath(path);
-    const auto iterator = std::find_if(
-        m_config.apps.begin(), m_config.apps.end(), [&normalizedPath](const AppRule& existing) {
-            return ContainsPath(existing, normalizedPath);
-        });
+    if (normalizedPath.empty()) {
+        m_lastError = L"规则路径无效";
+        return false;
+    }
+
+    const auto iterator = FindRuleByPath(m_config.apps, normalizedPath);
     if (iterator == m_config.apps.end()) {
-        m_lastError = L"未找到要删除的应用";
+        m_lastError = L"未找到要删除的规则";
         return false;
     }
 
@@ -197,12 +103,14 @@ bool RuleManager::Remove(const std::wstring& path) {
 
 bool RuleManager::SetEnabled(const std::wstring& path, bool enabled) {
     const std::wstring normalizedPath = PathUtils::NormalizePath(path);
-    const auto iterator = std::find_if(
-        m_config.apps.begin(), m_config.apps.end(), [&normalizedPath](const AppRule& existing) {
-            return ContainsPath(existing, normalizedPath);
-        });
+    if (normalizedPath.empty()) {
+        m_lastError = L"规则路径无效";
+        return false;
+    }
+
+    const auto iterator = FindRuleByPath(m_config.apps, normalizedPath);
     if (iterator == m_config.apps.end()) {
-        m_lastError = L"未找到要修改的应用";
+        m_lastError = L"未找到要修改的规则";
         return false;
     }
     if (iterator->enabled == enabled) {
@@ -218,26 +126,8 @@ const std::vector<AppRule>& RuleManager::Rules() const noexcept {
     return m_config.apps;
 }
 
-const std::filesystem::path& RuleManager::ConfigPath() const noexcept {
-    return m_store.Path();
-}
-
 const std::wstring& RuleManager::LastError() const noexcept {
     return m_lastError;
-}
-
-bool RuleManager::AutoStart() const noexcept {
-    return m_config.autoStart;
-}
-
-bool RuleManager::SetAutoStart(bool enabled) {
-    if (m_config.autoStart == enabled) {
-        return true;
-    }
-
-    const AppConfig previousConfig = m_config;
-    m_config.autoStart = enabled;
-    return SaveAfterChange(previousConfig);
 }
 
 bool RuleManager::SaveAfterChange(const AppConfig& previousConfig) {

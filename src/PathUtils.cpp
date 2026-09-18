@@ -10,6 +10,20 @@
 namespace PathUtils {
 namespace {
 
+bool IsExePath(const std::wstring& path) {
+    const std::wstring extension = std::filesystem::path(path).extension().wstring();
+    return extension.size() == 4 && extension[0] == L'.' &&
+           (extension[1] == L'e' || extension[1] == L'E') &&
+           (extension[2] == L'x' || extension[2] == L'X') &&
+           (extension[3] == L'e' || extension[3] == L'E');
+}
+
+std::wstring DefaultDisplayName(const std::wstring& path) {
+    const std::filesystem::path value(path);
+    const std::wstring name = value.stem().wstring();
+    return name.empty() ? value.filename().wstring() : name;
+}
+
 std::wstring StripExtendedPrefix(std::wstring path) {
     constexpr wchar_t kExtendedPrefix[] = L"\\\\?\\";
     constexpr wchar_t kUncPrefix[] = L"UNC\\";
@@ -130,14 +144,59 @@ bool IsPathUnderDirectory(const std::wstring& path, const std::wstring& director
                CSTR_EQUAL;
 }
 
-int FindRuleIndex(const std::vector<AppRule>& rules, const std::wstring& path) {
-    for (std::size_t index = 0; index < rules.size(); ++index) {
-        if (SamePath(rules[index].path, path) ||
-            (rules[index].recursive && IsPathUnderDirectory(path, rules[index].path))) {
-            return static_cast<int>(index);
+bool NormalizeRule(AppRule& rule, std::wstring& error) {
+    error.clear();
+    rule.path = NormalizePath(rule.path);
+    if (rule.path.empty()) {
+        error = L"规则路径无效";
+        return false;
+    }
+
+    const DWORD attributes = GetFileAttributesW(rule.path.c_str());
+    if (rule.kind == RuleKind::Executable) {
+        if (!IsExePath(rule.path)) {
+            error = L"规则路径必须是 .exe 文件";
+            return false;
+        }
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            error = L"规则路径不能是文件夹";
+            return false;
+        }
+    } else {
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            error = L"文件夹规则路径必须是文件夹";
+            return false;
         }
     }
-    return -1;
+
+    if (rule.displayName.empty()) {
+        rule.displayName = DefaultDisplayName(rule.path);
+    }
+    if (rule.displayName.empty()) {
+        rule.displayName = rule.path;
+    }
+    return true;
+}
+
+bool Matches(const AppRule& rule, const std::wstring& path) {
+    if (rule.kind == RuleKind::Executable) {
+        return SamePath(rule.path, path);
+    }
+    return IsExePath(path) && IsPathUnderDirectory(path, rule.path);
+}
+
+bool Overlaps(const AppRule& left, const AppRule& right) {
+    if (left.kind == RuleKind::Executable) {
+        return Matches(right, left.path);
+    }
+    if (right.kind == RuleKind::Executable) {
+        return Matches(left, right.path);
+    }
+    return SamePath(left.path, right.path) ||
+           IsPathUnderDirectory(left.path, right.path) ||
+           IsPathUnderDirectory(right.path, left.path);
 }
 
 }  // namespace PathUtils

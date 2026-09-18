@@ -9,38 +9,15 @@
 
 namespace {
 
-template <typename Callback>
-void ForEachRuleTarget(const AppRule& rule, Callback callback) {
-    if (rule.recursive) {
-        return;
+bool RuleTargetExists(const AppRule& rule) {
+    const DWORD attributes = GetFileAttributesW(rule.path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        return false;
     }
-
-    bool hasPrimary = false;
-    if (!rule.path.empty()) {
-        callback(rule.path);
-        hasPrimary = true;
+    if (rule.kind == RuleKind::Directory) {
+        return (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     }
-    for (const std::wstring& target : rule.targets) {
-        if (!target.empty() && (!hasPrimary || !PathUtils::SamePath(target, rule.path))) {
-            callback(target);
-        }
-    }
-}
-
-bool AnyRuleTargetExists(const AppRule& rule) {
-    if (rule.recursive) {
-        const DWORD attributes = GetFileAttributesW(rule.path.c_str());
-        return attributes != INVALID_FILE_ATTRIBUTES &&
-               (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    }
-
-    bool exists = false;
-    ForEachRuleTarget(rule, [&exists](const std::wstring& target) {
-        if (GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            exists = true;
-        }
-    });
-    return exists;
+    return (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 }  // namespace
@@ -56,11 +33,12 @@ bool BlockerService::Start(const std::vector<AppRule>& rules) {
 
     {
         std::lock_guard lock(m_mutex);
-        m_rules = rules;
-        RebuildRuleIndexLocked();
-        m_processes.assign(m_rules.size(), {});
-        m_states.resize(m_rules.size());
-        RebuildStatesLocked();
+        m_runtimeRules.clear();
+        m_runtimeRules.reserve(rules.size());
+        for (const AppRule& rule : rules) {
+            m_runtimeRules.push_back({rule, {}});
+        }
+        m_serviceError.clear();
         m_started = true;
     }
 
@@ -73,20 +51,20 @@ bool BlockerService::Start(const std::vector<AppRule>& rules) {
     try {
         m_injectionThread = std::thread(&BlockerService::RunInjectionWorker, this);
     } catch (...) {
-        {
-            std::lock_guard lock(m_mutex);
-            m_started = false;
-            m_rules.clear();
-            m_ruleIndices.clear();
-            m_processes.clear();
-            m_states.clear();
-        }
-        Log(L"注入线程启动失败");
+        std::lock_guard lock(m_mutex);
+        m_started = false;
+        m_serviceError = L"注入线程启动失败";
+        Log(m_serviceError);
         return false;
     }
 
     if (!m_monitor.Start([this](const ProcessEvent& event) { OnProcessEvent(event); })) {
-        Stop();
+        StopInjectionWorker();
+        {
+            std::lock_guard lock(m_mutex);
+            m_started = false;
+            m_serviceError = L"进程监控启动失败";
+        }
         Log(L"进程监控启动失败");
         return false;
     }
@@ -95,9 +73,7 @@ bool BlockerService::Start(const std::vector<AppRule>& rules) {
     return true;
 }
 
-void BlockerService::Stop() {
-    m_monitor.Stop();
-
+void BlockerService::StopInjectionWorker() {
     {
         std::lock_guard lock(m_injectionMutex);
         m_injectionStopRequested = true;
@@ -107,16 +83,19 @@ void BlockerService::Stop() {
     if (m_injectionThread.joinable()) {
         m_injectionThread.join();
     }
+}
+
+void BlockerService::Stop() {
+    m_monitor.Stop();
+    StopInjectionWorker();
 
     bool wasStarted = false;
     {
         std::lock_guard lock(m_mutex);
         wasStarted = m_started;
         m_started = false;
-        m_rules.clear();
-        m_ruleIndices.clear();
-        m_processes.clear();
-        m_states.clear();
+        m_runtimeRules.clear();
+        m_serviceError.clear();
     }
     if (wasStarted) {
         Log(L"进程监控已停止");
@@ -133,46 +112,60 @@ void BlockerService::UpdateRules(const std::vector<AppRule>& rules) {
 
     {
         std::lock_guard lock(m_mutex);
-        std::vector<std::vector<TrackedProcess>> newProcesses(rules.size());
-        for (std::size_t newIndex = 0; newIndex < rules.size(); ++newIndex) {
-            const int oldIndex = FindRuleIndexLocked(rules[newIndex].path);
-            if (oldIndex >= 0 && static_cast<std::size_t>(oldIndex) < m_processes.size()) {
-                newProcesses[newIndex] = m_processes[static_cast<std::size_t>(oldIndex)];
+        std::vector<RuntimeRule> updatedRules;
+        updatedRules.reserve(rules.size());
+        for (const AppRule& rule : rules) {
+            RuntimeRule runtime{rule, {}};
+            const auto oldRule = std::find_if(
+                m_runtimeRules.begin(), m_runtimeRules.end(), [&rule](const RuntimeRule& old) {
+                    return PathUtils::SamePath(old.rule.path, rule.path);
+                });
+            if (oldRule != m_runtimeRules.end()) {
+                runtime.processes = oldRule->processes;
             }
+            updatedRules.push_back(std::move(runtime));
         }
 
         for (const ProcessInfo& process : runningProcesses) {
-            const int ruleIndex = FindRuleIndex(rules, process.imagePath);
-            if (ruleIndex < 0) {
+            const auto rule = std::find_if(
+                updatedRules.begin(), updatedRules.end(), [&process](const RuntimeRule& item) {
+                    return PathUtils::Matches(item.rule, process.imagePath);
+                });
+            if (rule == updatedRules.end()) {
                 continue;
             }
-            auto& tracked = newProcesses[static_cast<std::size_t>(ruleIndex)];
             const auto existing = std::find_if(
-                tracked.begin(), tracked.end(), [&process](const TrackedProcess& item) {
+                rule->processes.begin(), rule->processes.end(), [&process](const TrackedProcess& item) {
                     return SameProcess(item, process);
                 });
-            if (existing == tracked.end()) {
-                tracked.push_back({process.pid, process.creationTime, ProcessProtection::Observed,
-                                   L"目标进程已经运行，请重启应用"});
+            if (existing == rule->processes.end()) {
+                rule->processes.push_back({process.pid, process.creationTime,
+                                           ProcessProtection::Observed,
+                                           L"目标进程已经运行，请重启应用"});
             }
         }
-
-        m_rules = rules;
-        RebuildRuleIndexLocked();
-        m_processes = std::move(newProcesses);
-        m_states.resize(m_rules.size());
-        RebuildStatesLocked();
+        m_runtimeRules = std::move(updatedRules);
     }
     NotifyStateChanged();
 }
 
 std::vector<RuntimeRuleState> BlockerService::Snapshot() const {
     std::lock_guard lock(m_mutex);
-    return m_states;
-}
-
-std::vector<ProcessInfo> BlockerService::RunningProcesses() const {
-    return m_monitor.Snapshot();
+    std::vector<RuntimeRuleState> result;
+    result.reserve(m_runtimeRules.size());
+    for (const RuntimeRule& runtime : m_runtimeRules) {
+        RuntimeRuleState state;
+        state.path = runtime.rule.path;
+        if (!m_serviceError.empty() && !m_started) {
+            state.status = AppStatus::MonitoringUnavailable;
+            state.detail = m_serviceError;
+        } else {
+            state.status = StateForRule(runtime.rule, runtime.processes);
+            state.detail = DetailForRule(state.status, runtime.processes);
+        }
+        result.push_back(std::move(state));
+    }
+    return result;
 }
 
 bool BlockerService::WaitUntilReady(DWORD timeoutMs) const {
@@ -184,17 +177,15 @@ void BlockerService::OnProcessEvent(const ProcessEvent& event) {
         bool removed = false;
         {
             std::lock_guard lock(m_mutex);
-            for (auto& tracked : m_processes) {
-                const auto oldSize = tracked.size();
-                tracked.erase(std::remove_if(tracked.begin(), tracked.end(),
-                                             [&event](const TrackedProcess& process) {
-                                                 return SameProcess(process, event.process);
-                                             }),
-                              tracked.end());
-                removed = removed || oldSize != tracked.size();
-            }
-            if (removed) {
-                RebuildStatesLocked();
+            for (RuntimeRule& runtime : m_runtimeRules) {
+                const auto oldSize = runtime.processes.size();
+                runtime.processes.erase(
+                    std::remove_if(runtime.processes.begin(), runtime.processes.end(),
+                                   [&event](const TrackedProcess& process) {
+                                       return SameProcess(process, event.process);
+                                   }),
+                    runtime.processes.end());
+                removed = removed || oldSize != runtime.processes.size();
             }
         }
         if (removed) {
@@ -213,31 +204,29 @@ void BlockerService::OnProcessEvent(const ProcessEvent& event) {
             return;
         }
 
-        // A start event for a reused PID may arrive before a delayed stop
-        // event. Remove the stale identity before adding the new one.
-        for (auto& tracked : m_processes) {
-            tracked.erase(std::remove_if(tracked.begin(), tracked.end(),
-                                         [&event](const TrackedProcess& process) {
-                                             return process.pid == event.process.pid &&
-                                                    !SameProcess(process, event.process);
-                                         }),
-                          tracked.end());
+        for (RuntimeRule& runtime : m_runtimeRules) {
+            runtime.processes.erase(
+                std::remove_if(runtime.processes.begin(), runtime.processes.end(),
+                               [&event](const TrackedProcess& process) {
+                                   return process.pid == event.process.pid &&
+                                          !SameProcess(process, event.process);
+                               }),
+                runtime.processes.end());
         }
 
-        rule = m_rules[static_cast<std::size_t>(ruleIndex)];
-        auto& tracked = m_processes[static_cast<std::size_t>(ruleIndex)];
+        RuntimeRule& runtime = m_runtimeRules[static_cast<std::size_t>(ruleIndex)];
+        rule = runtime.rule;
         const auto existing = std::find_if(
-            tracked.begin(), tracked.end(), [&event](const TrackedProcess& process) {
+            runtime.processes.begin(), runtime.processes.end(), [&event](const TrackedProcess& process) {
                 return SameProcess(process, event.process);
             });
-        if (existing != tracked.end()) {
+        if (existing != runtime.processes.end()) {
             return;
         }
-        tracked.push_back({event.process.pid, event.process.creationTime,
-                           event.initialScan ? ProcessProtection::Observed
-                                              : ProcessProtection::Pending,
-                           event.initialScan ? L"目标进程已经运行，请重启应用" : L""});
-        RebuildStatesLocked();
+        runtime.processes.push_back({event.process.pid, event.process.creationTime,
+                                     event.initialScan ? ProcessProtection::Observed
+                                                       : ProcessProtection::Pending,
+                                     event.initialScan ? L"目标进程已经运行，请重启应用" : L""});
         shouldInject = rule.enabled && !event.initialScan;
     }
 
@@ -279,8 +268,9 @@ void BlockerService::RunInjectionWorker() {
         {
             std::lock_guard lock(m_mutex);
             const int ruleIndex = FindRuleIndexLocked(event.process.imagePath);
-            enabled = ruleIndex >= 0 && m_rules[static_cast<std::size_t>(ruleIndex)].enabled &&
-                      m_started;
+            enabled = ruleIndex >= 0 && m_runtimeRules[static_cast<std::size_t>(ruleIndex)]
+                                             .rule.enabled &&
+                      m_started && m_serviceError.empty();
         }
         if (!enabled || !ProcessMonitor::IsProcessAlive(event.process)) {
             continue;
@@ -302,12 +292,12 @@ void BlockerService::ApplyInjectionResult(const ProcessEvent& event,
             return;
         }
 
-        auto& tracked = m_processes[static_cast<std::size_t>(ruleIndex)];
+        auto& processes = m_runtimeRules[static_cast<std::size_t>(ruleIndex)].processes;
         const auto existing = std::find_if(
-            tracked.begin(), tracked.end(), [&event](const TrackedProcess& process) {
+            processes.begin(), processes.end(), [&event](const TrackedProcess& process) {
                 return SameProcess(process, event.process);
             });
-        if (existing == tracked.end()) {
+        if (existing == processes.end()) {
             return;
         }
 
@@ -322,40 +312,14 @@ void BlockerService::ApplyInjectionResult(const ProcessEvent& event,
             logMessage = L"注入失败 PID=" + std::to_wstring(event.process.pid) + L"：" +
                          existing->detail;
         }
-        RebuildStatesLocked();
     }
     Log(logMessage);
     NotifyStateChanged();
 }
 
-void BlockerService::RebuildStatesLocked() {
-    m_states.resize(m_rules.size());
-    for (std::size_t index = 0; index < m_rules.size(); ++index) {
-        m_states[index].rule = m_rules[index];
-        m_states[index].status = StateForRule(m_rules[index], m_processes[index]);
-        m_states[index].detail = DetailForRule(m_states[index].status, m_processes[index]);
-    }
-}
-
-void BlockerService::RebuildRuleIndexLocked() {
-    m_ruleIndices.clear();
-    for (std::size_t index = 0; index < m_rules.size(); ++index) {
-        ForEachRuleTarget(m_rules[index], [this, index](const std::wstring& target) {
-            m_ruleIndices.emplace(target, index);
-        });
-    }
-}
-
 int BlockerService::FindRuleIndexLocked(const std::wstring& path) const {
-    const auto iterator = m_ruleIndices.find(path);
-    if (iterator != m_ruleIndices.end()) {
-        return static_cast<int>(iterator->second);
-    }
-
-    for (std::size_t index = 0; index < m_rules.size(); ++index) {
-        if (m_rules[index].recursive &&
-            (PathUtils::SamePath(path, m_rules[index].path) ||
-             PathUtils::IsPathUnderDirectory(path, m_rules[index].path))) {
+    for (std::size_t index = 0; index < m_runtimeRules.size(); ++index) {
+        if (PathUtils::Matches(m_runtimeRules[index].rule, path)) {
             return static_cast<int>(index);
         }
     }
@@ -388,7 +352,7 @@ AppStatus BlockerService::StateForRule(
     }
 
     if (processes.empty()) {
-        return AnyRuleTargetExists(rule) ? AppStatus::Waiting : AppStatus::PathMissing;
+        return RuleTargetExists(rule) ? AppStatus::Waiting : AppStatus::PathMissing;
     }
 
     const std::size_t blockedCount = static_cast<std::size_t>(std::count_if(
@@ -477,24 +441,6 @@ std::wstring BlockerService::DetailForRule(
     return {};
 }
 
-int BlockerService::FindRuleIndex(const std::vector<AppRule>& rules,
-                                  const std::wstring& path) {
-    for (std::size_t index = 0; index < rules.size(); ++index) {
-        if (rules[index].recursive && PathUtils::IsPathUnderDirectory(path, rules[index].path)) {
-            return static_cast<int>(index);
-        }
-
-        bool matched = false;
-        ForEachRuleTarget(rules[index], [&matched, &path](const std::wstring& target) {
-            matched = matched || PathUtils::SamePath(target, path);
-        });
-        if (matched) {
-            return static_cast<int>(index);
-        }
-    }
-    return -1;
-}
-
 void BlockerService::Log(const std::wstring& message) const {
     if (m_logger != nullptr && !message.empty()) {
         m_logger->Info(message);
@@ -519,6 +465,8 @@ const wchar_t* AppStatusText(AppStatus status) {
             return L"程序路径不存在";
         case AppStatus::Disabled:
             return L"已停用";
+        case AppStatus::MonitoringUnavailable:
+            return L"进程监控不可用";
         default:
             return L"未知状态";
     }

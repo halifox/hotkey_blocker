@@ -7,7 +7,6 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
-#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -22,10 +21,11 @@ enum class AppStatus {
     InjectionFailed,
     PathMissing,
     Disabled,
+    MonitoringUnavailable,
 };
 
 struct RuntimeRuleState {
-    AppRule rule;
+    std::wstring path;
     AppStatus status = AppStatus::Waiting;
     std::wstring detail;
 };
@@ -46,7 +46,6 @@ public:
     void Stop();
     void UpdateRules(const std::vector<AppRule>& rules);
     std::vector<RuntimeRuleState> Snapshot() const;
-    std::vector<ProcessInfo> RunningProcesses() const;
     bool WaitUntilReady(DWORD timeoutMs) const;
     void SetStateChangedCallback(StateChangedCallback callback);
 
@@ -65,21 +64,17 @@ private:
         std::wstring detail;
     };
 
-    struct PathLess {
-        bool operator()(const std::wstring& left, const std::wstring& right) const {
-            return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) ==
-                   CSTR_LESS_THAN;
-        }
+    struct RuntimeRule {
+        AppRule rule;
+        std::vector<TrackedProcess> processes;
     };
 
     void OnProcessEvent(const ProcessEvent& event);
     void RunInjectionWorker();
+    void StopInjectionWorker();
     void QueueInjection(const ProcessEvent& event);
     void ApplyInjectionResult(const ProcessEvent& event, const InjectionResult& injection);
-    void RebuildStatesLocked();
-    void RebuildRuleIndexLocked();
     int FindRuleIndexLocked(const std::wstring& path) const;
-    static int FindRuleIndex(const std::vector<AppRule>& rules, const std::wstring& path);
     void NotifyStateChanged() const;
     static bool SameProcess(const TrackedProcess& tracked, const ProcessInfo& process);
     static AppStatus StateForRule(const AppRule& rule,
@@ -92,11 +87,9 @@ private:
     ProcessMonitor m_monitor;
     Injector m_injector;
     Logger* m_logger = nullptr;
-    std::vector<AppRule> m_rules;
-    std::map<std::wstring, std::size_t, PathLess> m_ruleIndices;
-    std::vector<std::vector<TrackedProcess>> m_processes;
-    std::vector<RuntimeRuleState> m_states;
+    std::vector<RuntimeRule> m_runtimeRules;
     StateChangedCallback m_stateChangedCallback;
+    std::wstring m_serviceError;
     bool m_started = false;
 
     mutable std::mutex m_injectionMutex;

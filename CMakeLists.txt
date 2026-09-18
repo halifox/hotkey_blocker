@@ -55,6 +55,7 @@ add_executable(hkb WIN32
         src/RemoteInjector.cpp
         src/RuleManager.cpp
         src/StartupManager.cpp
+        src/Win32Support.cpp
         src/main.cpp
         src/app.rc
         "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
@@ -71,7 +72,7 @@ target_link_libraries(hkb PRIVATE
         comctl32
         ole32
         shell32
-        wbemuuid
+        user32
 )
 
 add_library(hotkey_hook SHARED
@@ -97,6 +98,7 @@ if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     add_executable(hotkey_blocker_injector32
             injector32/main.cpp
             src/RemoteInjector.cpp
+            src/Win32Support.cpp
     )
     target_include_directories(hotkey_blocker_injector32 PRIVATE src)
     hkb_configure_target(hotkey_blocker_injector32)
@@ -115,6 +117,7 @@ if (HKB_BUILD_TESTS)
             src/ConfigStore.cpp
             src/PathUtils.cpp
             src/RuleManager.cpp
+            src/Win32Support.cpp
     )
     target_include_directories(hkb_config_store_test PRIVATE src)
     hkb_configure_target(hkb_config_store_test)
@@ -134,6 +137,7 @@ if (HKB_BUILD_TESTS)
                 src/ArchitectureDetector.cpp
                 src/Injector.cpp
                 src/RemoteInjector.cpp
+                src/Win32Support.cpp
         )
         target_include_directories(hkb_injection_test PRIVATE src)
         hkb_configure_target(hkb_injection_test)
@@ -153,13 +157,13 @@ if (HKB_BUILD_TESTS)
                 src/PathUtils.cpp
                 src/ProcessMonitor.cpp
                 src/RemoteInjector.cpp
+                src/Win32Support.cpp
         )
         target_include_directories(hkb_blocker_service_integration_test PRIVATE src)
         hkb_configure_target(hkb_blocker_service_integration_test)
         target_link_libraries(hkb_blocker_service_integration_test PRIVATE
                 shell32
                 user32
-                wbemuuid
         )
         add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
         set_target_properties(hkb_blocker_service_integration_test PROPERTIES
@@ -204,7 +208,6 @@ else ()
             "${HKB_WIN32_RUNTIME_DIR}/HotkeyHook32.dll"
             "${HKB_WIN32_RUNTIME_DIR}/HotkeyBlockerInjector32.exe"
             DESTINATION win32
-            OPTIONAL
     )
 endif ()
 

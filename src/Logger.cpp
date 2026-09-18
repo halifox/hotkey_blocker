@@ -4,20 +4,12 @@
 #include <shlobj.h>
 
 #include <algorithm>
-#include <iterator>
 #include <string>
 #include <utility>
 
 namespace {
 
 constexpr unsigned long long kMaxLogBytes = 2ull * 1024ull * 1024ull;
-
-std::wstring TrimLineEnd(std::wstring value) {
-    while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) {
-        value.pop_back();
-    }
-    return value;
-}
 
 }  // namespace
 

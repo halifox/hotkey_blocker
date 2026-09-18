@@ -144,7 +144,7 @@ int wmain() {
     AppRule folderRule;
     folderRule.path = PathUtils::NormalizePath(directory.wstring());
     folderRule.displayName = L"测试程序文件夹";
-    folderRule.recursive = true;
+    folderRule.kind = RuleKind::Directory;
     const std::filesystem::path logPath = std::filesystem::path(temporaryFile).wstring() +
                                           L".log";
     Logger logger(logPath);
@@ -234,4 +234,3 @@ int wmain() {
     }
     return result;
 }
-

@@ -1,73 +1,24 @@
 #include "Injector.h"
 
 #include "RemoteInjector.h"
+#include "Win32Support.h"
 
 #include <windows.h>
 
 #include <filesystem>
-#include <iterator>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace {
 
 constexpr DWORD kHelperTimeoutMs = 15000;
 
-std::wstring Win32Error(const wchar_t* operation, DWORD errorCode = GetLastError()) {
-    wchar_t buffer[512]{};
-    const DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM |
-                                           FORMAT_MESSAGE_IGNORE_INSERTS,
-                                       nullptr, errorCode, 0, buffer,
-                                       static_cast<DWORD>(std::size(buffer)), nullptr);
-    std::wstring result(operation);
-    if (length != 0) {
-        result += L"：";
-        result.append(buffer, length);
-        while (!result.empty() && (result.back() == L'\r' || result.back() == L'\n')) {
-            result.pop_back();
-        }
-    } else {
-        result += L"（错误码 " + std::to_wstring(errorCode) + L"）";
-    }
-    return result;
-}
-
-std::wstring ModulePath() {
-    std::vector<wchar_t> buffer(512);
-    while (buffer.size() <= 32768) {
-        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
-                                                static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            return {};
-        }
-        if (length < buffer.size() - 1) {
-            return std::wstring(buffer.data(), length);
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-    return {};
-}
-
 std::filesystem::path Find32BitHelper(const std::filesystem::path& directory) {
-    const std::filesystem::path names[] = {
-        directory / L"HotkeyBlockerInjector32.exe",
-        directory / L"hkb_injector32.exe",
-        directory / L"win32" / L"HotkeyBlockerInjector32.exe",
-        directory / L"win32" / L"hkb_injector32.exe",
-        directory.parent_path() / L"bin32" / L"HotkeyBlockerInjector32.exe",
-        directory.parent_path() / L"bin32" / L"hkb_injector32.exe",
-        directory.parent_path() / L"HotkeyBlockerInjector32.exe",
-        directory.parent_path() / L"hkb_injector32.exe",
-    };
-    for (const auto& path : names) {
-        const DWORD attributes = GetFileAttributesW(path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            return path;
-        }
-    }
-    return {};
+    const std::filesystem::path path = directory / L"win32" / L"HotkeyBlockerInjector32.exe";
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+                   (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0
+               ? path
+               : std::filesystem::path{};
 }
 
 std::filesystem::path FindHookDll(const std::filesystem::path& directory,
@@ -75,22 +26,14 @@ std::filesystem::path FindHookDll(const std::filesystem::path& directory,
     const wchar_t* fileName = architecture == ProcessArchitecture::X86
                                    ? L"HotkeyHook32.dll"
                                    : L"HotkeyHook64.dll";
-    const std::filesystem::path names[] = {
-        directory / fileName,
-        architecture == ProcessArchitecture::X86 ? directory / L"win32" / fileName
-                                                  : directory / fileName,
-        architecture == ProcessArchitecture::X86
-            ? directory.parent_path() / L"bin32" / fileName
-            : directory.parent_path() / fileName,
-    };
-    for (const auto& path : names) {
-        const DWORD attributes = GetFileAttributesW(path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            return path;
-        }
-    }
-    return {};
+    const bool crossArchitecture = sizeof(void*) == 8 && architecture == ProcessArchitecture::X86;
+    const std::filesystem::path path = crossArchitecture ? directory / L"win32" / fileName
+                                                         : directory / fileName;
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+                   (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0
+               ? path
+               : std::filesystem::path{};
 }
 
 }  // namespace
@@ -159,7 +102,7 @@ InjectionResult Injector::InjectWith32BitHelper(
     if (!CreateProcessW(helper.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
                         CREATE_NO_WINDOW, nullptr, m_executableDirectory.c_str(), &startupInfo,
                         &processInfo)) {
-        result.error = Win32Error(L"启动 32 位注入辅助程序失败");
+        result.error = Win32Support::ErrorMessage(L"启动 32 位注入辅助程序失败");
         return result;
     }
 
@@ -167,11 +110,11 @@ InjectionResult Injector::InjectWith32BitHelper(
     if (waitResult == WAIT_TIMEOUT) {
         result.error = L"等待 32 位注入辅助程序超时";
     } else if (waitResult != WAIT_OBJECT_0) {
-        result.error = Win32Error(L"等待 32 位注入辅助程序失败");
+        result.error = Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
     } else {
         DWORD exitCode = 1;
         if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
-            result.error = Win32Error(L"获取 32 位注入结果失败");
+            result.error = Win32Support::ErrorMessage(L"获取 32 位注入结果失败");
         } else if (exitCode == 0) {
             result.success = true;
         } else {
@@ -210,7 +153,7 @@ std::wstring Injector::QuoteCommandLineArgument(const std::wstring& argument) {
 }
 
 std::filesystem::path Injector::ExecutableDirectory() {
-    const std::wstring modulePath = ModulePath();
+    const std::wstring modulePath = Win32Support::ModulePath();
     if (modulePath.empty()) {
         return std::filesystem::current_path();
     }

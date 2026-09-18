@@ -16,14 +16,14 @@ bool Check(bool condition, const wchar_t* message) {
 }
 
 bool SameConfig(const AppConfig& left, const AppConfig& right) {
-    if (left.version != right.version || left.autoStart != right.autoStart ||
-        left.apps.size() != right.apps.size()) {
+    if (left.version != right.version || left.apps.size() != right.apps.size()) {
         return false;
     }
     for (std::size_t index = 0; index < left.apps.size(); ++index) {
         if (left.apps[index].path != right.apps[index].path ||
             left.apps[index].enabled != right.apps[index].enabled ||
-            left.apps[index].recursive != right.apps[index].recursive) {
+            left.apps[index].displayName != right.apps[index].displayName ||
+            left.apps[index].kind != right.apps[index].kind) {
             return false;
         }
     }
@@ -48,15 +48,12 @@ int wmain() {
     DeleteFileW(configPath.c_str());
     DeleteFileW((configPath.wstring() + L".tmp").c_str());
 
-    AppConfig expected{
-        2,
-        true,
-        {{L"C:\\程序\\示例.exe", true}, {L"D:\\工具\\禁用.exe", false}},
-    };
+    AppConfig expected;
+    expected.apps = {{L"C:\\程序\\示例.exe", true}, {L"D:\\工具\\禁用.exe", false}};
     AppRule folderRule;
     folderRule.path = temporaryDirectory;
     folderRule.displayName = L"测试文件夹";
-    folderRule.recursive = true;
+    folderRule.kind = RuleKind::Directory;
     expected.apps.push_back(folderRule);
 
     ConfigStore store(configPath);
@@ -99,8 +96,10 @@ int wmain() {
 
     RuleManager manager{ConfigStore(managerConfigPath)};
     passed = Check(manager.Load(), L"加载空规则") && passed;
-    passed = Check(manager.Add(modulePathBuffer), L"添加规则并立即保存") && passed;
-    passed = Check(!manager.Add(modulePathBuffer), L"拒绝重复规则") && passed;
+    AppRule executableRule;
+    executableRule.path = modulePathBuffer;
+    passed = Check(manager.AddRule(executableRule), L"添加规则并立即保存") && passed;
+    passed = Check(!manager.AddRule(executableRule), L"拒绝重复规则") && passed;
     passed = Check(manager.SetEnabled(modulePathBuffer, false), L"保存停用状态") && passed;
 
     RuleManager reloaded{ConfigStore(managerConfigPath)};
@@ -115,4 +114,3 @@ int wmain() {
     DeleteFileW((managerConfigPath.wstring() + L".tmp").c_str());
     return passed ? 0 : 1;
 }
-
