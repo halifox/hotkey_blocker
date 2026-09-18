@@ -234,7 +234,7 @@ set(CPACK_NSIS_MUI_FINISHPAGE_RUN "HotkeyBlocker.exe")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-        "ExecWait '$SYSDIR\\\\taskkill.exe /F /T /IM HotkeyBlocker.exe'\nDeleteRegValue HKCU Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run HotkeyBlocker")
+        "ExecWait '$SYSDIR\\\\taskkill.exe /F /T /IM HotkeyBlocker.exe'\nDeleteRegValue HKCU Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run HotkeyBlocker\nRMDir /r \\\"$LOCALAPPDATA\\\\HotkeyBlocker\\\"")
 set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hotkey_blocker/blob/master/docs/USER_GUIDE.md")
 set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hotkey_blocker")
 
