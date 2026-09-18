@@ -165,6 +165,8 @@ set(CPACK_NSIS_PACKAGE_NAME "Hotkey Blocker")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+        "ExecWait '\"$SYSDIR\\taskkill.exe\" /F /T /IM HotkeyBlocker.exe'")
 set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hkb/blob/master/docs/USER_GUIDE.md")
 set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hkb")
 
