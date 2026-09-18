@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HotkeyPolicy.h"
+
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -19,16 +21,17 @@ struct AppRule {
     bool enabled = true;
     std::wstring displayName;
     RuleKind kind = RuleKind::Executable;
+    HotkeyPolicy hotkeyPolicy;
 };
 
 struct AppConfig {
-    int version = 1;
+    int version = 2;
     std::vector<AppRule> apps;
 };
 
 class ConfigStore final {
 public:
-    static constexpr int kCurrentVersion = 1;
+    static constexpr int kCurrentVersion = 2;
 
     ConfigStore();
     explicit ConfigStore(std::filesystem::path path);

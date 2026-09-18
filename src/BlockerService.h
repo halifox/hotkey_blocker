@@ -2,6 +2,7 @@
 
 #include "ConfigStore.h"
 #include "Injector.h"
+#include "HotkeyPolicyTransport.h"
 #include "ProcessMonitor.h"
 
 #include <condition_variable>
@@ -87,6 +88,7 @@ private:
     ProcessMonitor m_monitor;
     Injector m_injector;
     Logger* m_logger = nullptr;
+    HotkeyPolicyRegistry m_policyRegistry;
     std::vector<RuntimeRule> m_runtimeRules;
     StateChangedCallback m_stateChangedCallback;
     std::wstring m_serviceError;

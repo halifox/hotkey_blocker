@@ -145,6 +145,10 @@ int wmain() {
     folderRule.path = PathUtils::NormalizePath(directory.wstring());
     folderRule.displayName = L"测试程序文件夹";
     folderRule.kind = RuleKind::Directory;
+    folderRule.hotkeyPolicy.mode = HotkeyMode::Blacklist;
+    folderRule.hotkeyPolicy.hotkeys = {
+        {HotkeyPolicyConstants::kModifierControl | HotkeyPolicyConstants::kModifierAlt,
+         VK_F24}};
     const std::filesystem::path logPath = std::filesystem::path(temporaryFile).wstring() +
                                           L".log";
     Logger logger(logPath);
@@ -170,7 +174,8 @@ int wmain() {
     }
 
     std::wstring commandLine = Quote(probe.wstring()) + L" " + Quote(readyName) + L" " +
-                               Quote(releaseName) + L" " + Quote(outputPath.wstring());
+                               Quote(releaseName) + L" " + Quote(outputPath.wstring()) +
+                               L" --blacklist";
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     PROCESS_INFORMATION processInfo{};
@@ -195,9 +200,13 @@ int wmain() {
             DWORD childExitCode = 1;
             std::string output;
             if (GetExitCodeProcess(processInfo.hProcess, &childExitCode) &&
-                ReadText(outputPath, output) && childExitCode == 0 &&
-                output.find("baseline=1") != std::string::npos &&
-                output.find("blocked=1") != std::string::npos) {
+                 ReadText(outputPath, output) && childExitCode == 0 &&
+                 output.find("baseline=1") != std::string::npos &&
+                 output.find("blocked=1") != std::string::npos &&
+                 output.find("baseline_allowed=1") != std::string::npos &&
+                 output.find("after_allowed=1") != std::string::npos &&
+                 output.find("baseline_selected=1") != std::string::npos &&
+                 output.find("after_selected=0") != std::string::npos) {
                 result = 0;
             }
         }
