@@ -2,6 +2,7 @@
 
 #define IDD_MAIN_WINDOW 101
 #define IDR_TRAY_MENU 102
+#define IDI_APP_ICON 103
 
 #define IDC_APP_LIST 1001
 #define IDC_ADD_EXECUTABLE 1002

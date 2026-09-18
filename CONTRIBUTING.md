@@ -13,7 +13,8 @@
 3. 从最新 `master` 创建短生命周期分支，例如 `feature/rule-export` 或 `fix/injection-timeout`。
 4. 保持提交小而聚焦，提交信息应说明实际变化，不要使用无意义的标题。
 5. 修改后运行对应架构的构建；涉及打包时运行 `-Package`。
-6. 创建 Pull Request，填写变更、测试环境、已知限制和用户可见影响。
+6. 运行对应构建目录中的 CTest，并在 Pull Request 中填写测试结果。
+7. 创建 Pull Request，填写变更、测试环境、已知限制和用户可见影响。
 
 ## 代码要求
 
@@ -31,6 +32,8 @@
 ```powershell
 .\scripts\build.ps1 -Architecture x64 -Configuration Release
 .\scripts\build.ps1 -Architecture x86 -Configuration Release
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe' --test-dir out/build/x64-release --output-on-failure
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe' --test-dir out/build/x86-release --output-on-failure
 ```
 
 涉及安装包时再执行：
@@ -46,6 +49,7 @@
 - [ ] 说明了用户可见变化和不兼容变化。
 - [ ] 更新了 README、用户指南或安全文档（如适用）。
 - [ ] 验证了相关 x86/x64 构建。
+- [ ] 运行了相关架构的 CTest，且结果通过。
 - [ ] 没有提交 `out/`、`bin/`、`cmake-build-*` 或个人配置。
 - [ ] 没有提交真实用户路径、日志或敏感数据。
 - [ ] 新增第三方代码时补充了来源和许可证声明。

@@ -23,6 +23,10 @@ function(hkb_configure_target target)
     target_compile_definitions("${target}" PRIVATE ${HKB_WINDOWS_DEFINITIONS})
     if (MSVC)
         target_compile_options("${target}" PRIVATE /utf-8)
+        # Ship self-contained binaries so a clean Windows installation does not
+        # need a separately installed VC++ redistributable just to load the hook.
+        set_property(TARGET "${target}" PROPERTY MSVC_RUNTIME_LIBRARY
+                "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif ()
 endfunction()
 
@@ -101,6 +105,71 @@ if (CMAKE_SIZEOF_VOID_P EQUAL 4)
             OUTPUT_NAME HotkeyBlockerInjector32)
 endif ()
 
+option(HKB_BUILD_TESTS "Build Hotkey Blocker tests" ON)
+
+if (HKB_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(hkb_config_store_test
+            tests/ConfigStoreTest.cpp
+            src/ConfigStore.cpp
+            src/PathUtils.cpp
+            src/RuleManager.cpp
+    )
+    target_include_directories(hkb_config_store_test PRIVATE src)
+    hkb_configure_target(hkb_config_store_test)
+    target_link_libraries(hkb_config_store_test PRIVATE ole32 shell32)
+    add_test(NAME hkb_config_store_round_trip COMMAND hkb_config_store_test)
+
+    add_executable(hotkey_probe tests/HotkeyProbe.cpp)
+    hkb_configure_target(hotkey_probe)
+    target_link_libraries(hotkey_probe PRIVATE user32)
+    set_target_properties(hotkey_probe PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
+    )
+
+    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+        add_executable(hkb_injection_test
+                tests/HotkeyInjectionTest.cpp
+                src/ArchitectureDetector.cpp
+                src/Injector.cpp
+                src/RemoteInjector.cpp
+        )
+        target_include_directories(hkb_injection_test PRIVATE src)
+        hkb_configure_target(hkb_injection_test)
+        target_link_libraries(hkb_injection_test PRIVATE user32)
+        add_dependencies(hkb_injection_test hotkey_hook hotkey_probe)
+        set_target_properties(hkb_injection_test PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
+        )
+        add_test(NAME hkb_register_hotkey_injection COMMAND hkb_injection_test)
+
+        add_executable(hkb_blocker_service_integration_test
+                tests/BlockerServiceIntegrationTest.cpp
+                src/ArchitectureDetector.cpp
+                src/BlockerService.cpp
+                src/Injector.cpp
+                src/Logger.cpp
+                src/PathUtils.cpp
+                src/ProcessMonitor.cpp
+                src/RemoteInjector.cpp
+        )
+        target_include_directories(hkb_blocker_service_integration_test PRIVATE src)
+        hkb_configure_target(hkb_blocker_service_integration_test)
+        target_link_libraries(hkb_blocker_service_integration_test PRIVATE
+                shell32
+                user32
+                wbemuuid
+        )
+        add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
+        set_target_properties(hkb_blocker_service_integration_test PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
+        )
+        add_test(NAME hkb_blocker_service_integration
+                COMMAND hkb_blocker_service_integration_test)
+    endif ()
+endif ()
+
 install(TARGETS hkb
         RUNTIME DESTINATION .
         COMPONENT runtime
@@ -166,7 +235,7 @@ set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-        "ExecWait '\"$SYSDIR\\taskkill.exe\" /F /T /IM HotkeyBlocker.exe'")
+        "ExecWait '$SYSDIR\\\\taskkill.exe /F /T /IM HotkeyBlocker.exe'\nDeleteRegValue HKCU Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run HotkeyBlocker")
 set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hotkey_blocker/blob/master/docs/USER_GUIDE.md")
 set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hotkey_blocker")
 

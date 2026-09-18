@@ -46,10 +46,11 @@ namespace {
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
+UINT kTaskbarCreatedMessage = 0;
 
 }  // namespace
 
-class MainWindow final : public ATL::CDialogImpl<MainWindow> {
+class MainWindow final : public ATL::CDialogImpl<MainWindow>, public CMessageFilter {
 public:
     enum { IDD = IDD_MAIN_WINDOW };
 
@@ -57,6 +58,19 @@ public:
         : m_startHidden(startHidden), m_blockerService(&m_logger) {}
 
     ~MainWindow() = default;
+
+    bool ShouldStartHidden() const noexcept {
+        return m_startHidden && m_trayIconAdded;
+    }
+
+    BOOL PreTranslateMessage(MSG* message) override {
+        if (message != nullptr && kTaskbarCreatedMessage != 0 &&
+            message->message == kTaskbarCreatedMessage) {
+            RestoreTrayIcon();
+            return TRUE;
+        }
+        return FALSE;
+    }
 
     BEGIN_MSG_MAP(MainWindow)
         MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
@@ -83,6 +97,10 @@ private:
         handled = TRUE;
         m_listView = GetDlgItem(IDC_APP_LIST);
         InitializeListView();
+
+        if (!LoadWindowIcons()) {
+            m_logger.Error(L"加载应用图标失败");
+        }
 
         m_logger.Info(L"程序启动");
         if (!m_ruleManager.Load()) {
@@ -112,8 +130,13 @@ private:
         RefreshListView(true);
 
         m_trayIconAdded = AddTrayIcon();
+        if (!m_trayIconAdded) {
+            m_logger.Error(L"创建系统托盘图标失败，窗口将保持可见");
+            ShowError(L"托盘初始化失败",
+                      L"无法创建系统托盘图标，程序将保持窗口可见；关闭窗口将退出程序。");
+        }
         NotifyActionableStates();
-        if (m_startHidden) {
+        if (ShouldStartHidden()) {
             ::ShowWindow(m_hWnd, SW_HIDE);
         }
         return TRUE;
@@ -215,6 +238,10 @@ private:
             DestroyWindow();
             return 0;
         }
+        if (!m_trayIconAdded) {
+            DestroyWindow();
+            return 0;
+        }
         ::ShowWindow(m_hWnd, SW_HIDE);
         return 0;
     }
@@ -222,23 +249,40 @@ private:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         m_blockerService.SetStateChangedCallback({});
-        m_blockerService.Stop();
         RemoveTrayIcon();
+        m_blockerService.Stop();
+        DestroyWindowIcons();
         m_logger.Info(L"程序退出");
         PostQuitMessage(0);
         return 0;
     }
 
     bool AddTrayIcon() {
+        if (m_smallIcon == nullptr) {
+            return false;
+        }
         NOTIFYICONDATAW data{};
         data.cbSize = sizeof(data);
         data.hWnd = m_hWnd;
         data.uID = kTrayIconId;
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = kTrayMessage;
-        data.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        data.hIcon = m_smallIcon;
         wcscpy_s(data.szTip, L"Hotkey Blocker");
         return Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
+    }
+
+    void RestoreTrayIcon() {
+        if (m_hWnd == nullptr) {
+            return;
+        }
+        m_trayIconAdded = false;
+        m_trayIconAdded = AddTrayIcon();
+        if (!m_trayIconAdded) {
+            m_logger.Error(L"Explorer 重启后重新创建系统托盘图标失败");
+            return;
+        }
+        NotifyActionableStates();
     }
 
     void RemoveTrayIcon() {
@@ -301,7 +345,7 @@ private:
         ::SetWindowLongPtrW(m_listView, GWL_STYLE, listViewStyle | LVS_NOSCROLL);
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
-                            LVS_EX_LABELTIP);
+                            LVS_EX_LABELTIP | LVS_EX_INFOTIP);
         SHFILEINFOW shellFileInfo{};
         const DWORD_PTR systemImageList = SHGetFileInfoW(
             L"C:\\Windows", FILE_ATTRIBUTE_DIRECTORY, &shellFileInfo, sizeof(shellFileInfo),
@@ -325,6 +369,35 @@ private:
         if (header != nullptr) {
             const LONG_PTR headerStyle = ::GetWindowLongPtrW(header, GWL_STYLE);
             ::SetWindowLongPtrW(header, GWL_STYLE, headerStyle | HDS_NOSIZING);
+        }
+    }
+
+    bool LoadWindowIcons() {
+        const HINSTANCE resourceInstance = _Module.GetResourceInstance();
+        m_largeIcon = reinterpret_cast<HICON>(LoadImageW(
+            resourceInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+        m_smallIcon = reinterpret_cast<HICON>(LoadImageW(
+            resourceInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+        if (m_largeIcon == nullptr || m_smallIcon == nullptr) {
+            DestroyWindowIcons();
+            return false;
+        }
+
+        SendMessageW(m_hWnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(m_largeIcon));
+        SendMessageW(m_hWnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(m_smallIcon));
+        return true;
+    }
+
+    void DestroyWindowIcons() {
+        if (m_largeIcon != nullptr) {
+            DestroyIcon(m_largeIcon);
+            m_largeIcon = nullptr;
+        }
+        if (m_smallIcon != nullptr) {
+            DestroyIcon(m_smallIcon);
+            m_smallIcon = nullptr;
         }
     }
 
@@ -389,7 +462,7 @@ private:
             row.key = state.rule.path;
             row.path = state.rule.path;
             row.enabled = state.rule.enabled ? L"是" : L"否";
-            row.status = IsActionableStatus(state.status) ? AppStatusText(state.status) : L"";
+            row.status = AppStatusText(state.status);
             row.detail = state.detail;
             row.imageIndex = FileIconIndex(state.rule.path);
             if (state.rule.targets.size() > 1) {
@@ -740,6 +813,8 @@ private:
     bool m_trayIconAdded = false;
     HWND m_listView = nullptr;
     HIMAGELIST m_systemImageList = nullptr;
+    HICON m_largeIcon = nullptr;
+    HICON m_smallIcon = nullptr;
     Logger m_logger;
     RuleManager m_ruleManager;
     StartupManager m_startupManager;
@@ -778,6 +853,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     AtlInitCommonControls(ICC_WIN95_CLASSES | ICC_LISTVIEW_CLASSES);
     CMessageLoop messageLoop;
     _Module.AddMessageLoop(&messageLoop);
+    kTaskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
 
     const bool startHidden = commandLine != nullptr &&
                              wcsstr(commandLine, L"--background") != nullptr;
@@ -789,10 +865,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         CoUninitialize();
         return 1;
     }
+    messageLoop.AddMessageFilter(&window);
     window.CenterWindow();
-    window.ShowWindow(startHidden ? SW_HIDE : SW_SHOWNORMAL);
+    window.ShowWindow(window.ShouldStartHidden() ? SW_HIDE : SW_SHOWNORMAL);
 
     const int exitCode = messageLoop.Run();
+    messageLoop.RemoveMessageFilter(&window);
     CloseHandle(instanceMutex);
     _Module.RemoveMessageLoop();
     _Module.Term();

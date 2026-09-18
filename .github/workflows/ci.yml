@@ -43,6 +43,10 @@ jobs:
             }
           }
 
+      - name: Run tests
+        shell: pwsh
+        run: ctest --test-dir "out/build/${{ matrix.architecture }}-release" --output-on-failure
+
       - name: Check patch whitespace
         shell: pwsh
         run: git diff --check

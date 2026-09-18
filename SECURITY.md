@@ -28,7 +28,7 @@ Hotkey Blocker 是一个本地 Windows 工具，不是安全产品、反恶意�
 
 - 只从项目 Release 下载程序。
 - 校验 Release 提供的 SHA-256 文件。
-- 生产发布应使用 Authenticode 签名。
+- 生产发布由 Release 工作流使用 Authenticode 签名；未配置签名证书时工作流会失败，不会将未签名包作为正式 Release 发布。
 - 不要从临时下载目录、网络共享或普通用户可写目录运行程序。
 
 ### 权限边界误解

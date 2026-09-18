@@ -69,6 +69,29 @@ x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDe
 
 这些目录都被 `.gitignore` 忽略，不应提交到源码仓库。
 
+## 运行库、测试和签名
+
+MSVC 目标默认使用静态运行库（Release 为 `/MT`，Debug 为 `/MTd`）。因此由本项目构建的主程序、Hook DLL 和辅助程序不要求目标机器另外安装 Visual C++ Redistributable；这不代表可以省略 Windows SDK、ATL 或构建机上的 MSVC 工具链。
+
+测试目标默认启用。构建后运行：
+
+```powershell
+ctest --test-dir out/build/x64-release --output-on-failure
+ctest --test-dir out/build/x86-release --output-on-failure
+```
+
+测试覆盖配置读写、Hotkey 注册注入以及 BlockerService 的进程生命周期。若只需要构建产品目标，可以在 CMake 配置时传入 `-DHKB_BUILD_TESTS=OFF`。
+
+本地构建默认不签名。正式发布必须提供真实的 Authenticode 证书，脚本会对主程序、Hook DLL、x86 注入辅助程序和安装包逐一签名并验证：
+
+```powershell
+.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package `
+  -Version 1.0.0 -SignCertificatePath C:\path\release.pfx `
+  -SignCertificatePassword $env:HKB_SIGN_CERTIFICATE_PASSWORD -RequireSignature
+```
+
+GitHub Release 工作流读取 `HKB_SIGN_CERTIFICATE_BASE64`、`HKB_SIGN_CERTIFICATE_PASSWORD` 两个 Repository Secret，以及可选的 `HKB_SIGN_TIMESTAMP_URL` Repository Variable。未配置证书时，发布工作流会主动失败，不会上传未签名的安装包。
+
 ## 完整安装包
 
 x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。推荐使用：
@@ -90,6 +113,8 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 3. 使用 CPack 生成 NSIS 安装程序。
 4. 复制安装包到 `out/packages/`。
 5. 生成同名 `.sha256` 校验文件。
+
+卸载程序会先结束正在运行的主程序，再删除 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HotkeyBlocker`，避免留下失效的开机启动项。
 
 安装包内包含：
 

@@ -8,8 +8,13 @@ param(
 
     [string]$Version = '',
 
+    [string]$SignCertificatePath = '',
+    [string]$SignCertificatePassword = '',
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
+
     [switch]$Clean,
-    [switch]$Package
+    [switch]$Package,
+    [switch]$RequireSignature
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +25,24 @@ $preset = "$($Architecture.ToLowerInvariant())-$($Configuration.ToLowerInvariant
 $buildRoot = Join-Path $repoRoot 'out\build'
 $binRoot = Join-Path $repoRoot 'out\bin'
 $packageRoot = Join-Path $repoRoot 'out\packages'
+
+if (-not $SignCertificatePath -and $env:HKB_SIGN_CERTIFICATE_PATH) {
+    $SignCertificatePath = $env:HKB_SIGN_CERTIFICATE_PATH
+}
+if (-not $SignCertificatePassword -and $env:HKB_SIGN_CERTIFICATE_PASSWORD) {
+    $SignCertificatePassword = $env:HKB_SIGN_CERTIFICATE_PASSWORD
+}
+if ($env:HKB_SIGN_TIMESTAMP_URL) {
+    $TimestampUrl = $env:HKB_SIGN_TIMESTAMP_URL
+}
+
+$signingEnabled = -not [string]::IsNullOrWhiteSpace($SignCertificatePath)
+if ($RequireSignature -and -not $signingEnabled) {
+    throw '发布构建必须提供签名证书。请设置 HKB_SIGN_CERTIFICATE_PATH 或传入 -SignCertificatePath。'
+}
+if ($signingEnabled -and -not (Test-Path -LiteralPath $SignCertificatePath -PathType Leaf)) {
+    throw "找不到签名证书：$SignCertificatePath"
+}
 
 if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Version 必须是三段数字版本，例如 1.0.0。'
@@ -53,6 +76,101 @@ function Get-VsDevCommandPath {
         throw "找不到 VsDevCmd.bat：$vsDevCmd"
     }
     return $vsDevCmd
+}
+
+function Get-SignToolPath {
+    $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $kitsRoot = if (${env:ProgramFiles(x86)}) {
+        Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    } else {
+        $null
+    }
+    if ($kitsRoot -and (Test-Path -LiteralPath $kitsRoot)) {
+        $candidate = Get-ChildItem -LiteralPath $kitsRoot -Recurse -Filter signtool.exe -File |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($candidate) {
+            return $candidate
+        }
+    }
+    throw '找不到 signtool.exe。请安装 Windows SDK。'
+}
+
+function Sign-Artifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not $signingEnabled) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "找不到待签名文件：$Path"
+    }
+
+    $arguments = @('sign', '/fd', 'SHA256', '/f', $SignCertificatePath)
+    if ($SignCertificatePassword) {
+        $arguments += @('/p', $SignCertificatePassword)
+    }
+    if ($TimestampUrl) {
+        $arguments += @('/tr', $TimestampUrl, '/td', 'SHA256')
+    }
+    $arguments += $Path
+
+    Write-Host "签名：$Path"
+    & $signTool @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "签名失败：$Path"
+    }
+
+    & $signTool verify /pa /all $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "签名验证失败：$Path"
+    }
+}
+
+function Get-RuntimeArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('x64', 'x86')]
+        [string]$TargetArchitecture,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPreset
+    )
+
+    $directory = Join-Path $binRoot $TargetPreset
+    $files = @(
+        (Join-Path $directory 'HotkeyBlocker.exe'),
+        (Join-Path $directory $(if ($TargetArchitecture -eq 'x64') { 'HotkeyHook64.dll' } else { 'HotkeyHook32.dll' }))
+    )
+    if ($TargetArchitecture -eq 'x86') {
+        $files += Join-Path $directory 'HotkeyBlockerInjector32.exe'
+    }
+    return $files
+}
+
+function Sign-RuntimeArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$TargetPresets
+    )
+
+    foreach ($targetPreset in $TargetPresets) {
+        $targetArchitecture = if ($targetPreset.StartsWith('x64-', [System.StringComparison]::OrdinalIgnoreCase)) {
+            'x64'
+        } else {
+            'x86'
+        }
+        foreach ($artifact in Get-RuntimeArtifacts -TargetArchitecture $targetArchitecture -TargetPreset $targetPreset) {
+            Sign-Artifact -Path $artifact
+        }
+    }
 }
 
 function Invoke-VsCommand {
@@ -106,22 +224,31 @@ function Invoke-ConfigureAndBuild {
         [string]$TargetArchitecture,
 
         [Parameter(Mandatory = $true)]
-        [string]$TargetPreset,
-
-        [switch]$CreatePackage
+        [string]$TargetPreset
     )
 
     $versionArgument = if ($Version) { " -DHKB_PROJECT_VERSION=$Version" } else { '' }
     $command = "cmake --preset `"$TargetPreset`"$versionArgument && cmake --build --preset `"$TargetPreset`" --parallel"
-    if ($CreatePackage) {
-        $command += " && cmake --build --preset `"$TargetPreset`" --target package"
-    }
 
     Write-Host "==> $TargetArchitecture $Configuration ($TargetPreset)"
     Invoke-VsCommand -TargetArchitecture $TargetArchitecture -Command $command
 }
 
+function Invoke-CreatePackage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetArchitecture,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPreset
+    )
+
+    Write-Host "==> package $TargetArchitecture $Configuration ($TargetPreset)"
+    Invoke-VsCommand -TargetArchitecture $TargetArchitecture -Command "cmake --build --preset `"$TargetPreset`" --target package"
+}
+
 $vsDevCmd = Get-VsDevCommandPath
+$signTool = if ($signingEnabled) { Get-SignToolPath } else { $null }
 $presetsToBuild = @($preset)
 if ($Package -and $Architecture -eq 'x64') {
     $presetsToBuild = @("x86-$($Configuration.ToLowerInvariant())", $preset)
@@ -146,7 +273,13 @@ if ($Package) {
 if ($Package -and $Architecture -eq 'x64') {
     Invoke-ConfigureAndBuild -TargetArchitecture 'x86' -TargetPreset "x86-$($Configuration.ToLowerInvariant())"
 }
-Invoke-ConfigureAndBuild -TargetArchitecture $Architecture -TargetPreset $preset -CreatePackage:$Package
+Invoke-ConfigureAndBuild -TargetArchitecture $Architecture -TargetPreset $preset
+
+Sign-RuntimeArtifacts -TargetPresets $presetsToBuild
+
+if ($Package) {
+    Invoke-CreatePackage -TargetArchitecture $Architecture -TargetPreset $preset
+}
 
 if ($Package) {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
@@ -156,7 +289,9 @@ if ($Package) {
         throw "CPack 没有在 $targetBuildDir 生成安装包。"
     }
     foreach ($packageFile in $packages) {
-        Copy-Item -LiteralPath $packageFile.FullName -Destination $packageRoot -Force
+        $packagePath = Join-Path $packageRoot $packageFile.Name
+        Copy-Item -LiteralPath $packageFile.FullName -Destination $packagePath -Force
+        Sign-Artifact -Path $packagePath
     }
 
     Get-ChildItem -LiteralPath $packageRoot -File -Filter 'HotkeyBlocker-*.exe' |
