@@ -34,6 +34,44 @@ bool SameConfig(const AppConfig& left, const AppConfig& right) {
 }  // namespace
 
 int wmain() {
+    bool passed = true;
+    const uint32_t ctrlAlt = HotkeyPolicyConstants::kModifierControl |
+                             HotkeyPolicyConstants::kModifierAlt;
+    const HotkeySpec ctrlAltA{ctrlAlt, 'A'};
+    const HotkeySpec ctrlAltANoRepeat{ctrlAlt | HotkeyPolicyConstants::kModifierNoRepeat, 'A'};
+    const HotkeySpec ctrlAltB{ctrlAlt, 'B'};
+
+    HotkeyPolicy blockAll;
+    passed = Check(ShouldBlockHotkey(blockAll, ctrlAltA), L"拦截全部策略拦截快捷键") && passed;
+
+    HotkeyPolicy blacklist;
+    blacklist.mode = HotkeyMode::Blacklist;
+    blacklist.hotkeys = {ctrlAltA};
+    passed = Check(ShouldBlockHotkey(blacklist, ctrlAltANoRepeat),
+                   L"黑名单忽略 MOD_NOREPEAT") &&
+             passed;
+    passed = Check(!ShouldBlockHotkey(blacklist, ctrlAltB), L"黑名单放行未列出的快捷键") &&
+             passed;
+
+    HotkeyPolicy whitelist;
+    whitelist.mode = HotkeyMode::Whitelist;
+    whitelist.hotkeys = {ctrlAltA};
+    passed = Check(!ShouldBlockHotkey(whitelist, ctrlAltA), L"白名单放行列表中的快捷键") &&
+             passed;
+    passed = Check(ShouldBlockHotkey(whitelist, ctrlAltB), L"白名单拦截未列出的快捷键") &&
+             passed;
+
+    HotkeyPolicy emptyBlacklist;
+    emptyBlacklist.mode = HotkeyMode::Blacklist;
+    passed = Check(!ShouldBlockHotkey(emptyBlacklist, ctrlAltA),
+                   L"空黑名单放行全部快捷键") &&
+             passed;
+    HotkeyPolicy emptyWhitelist;
+    emptyWhitelist.mode = HotkeyMode::Whitelist;
+    passed = Check(ShouldBlockHotkey(emptyWhitelist, ctrlAltA),
+                   L"空白名单拦截全部快捷键") &&
+             passed;
+
     wchar_t temporaryDirectory[MAX_PATH]{};
     if (!Check(GetTempPathW(MAX_PATH, temporaryDirectory) != 0, L"获取临时目录")) {
         return 1;
@@ -76,7 +114,7 @@ int wmain() {
         return 1;
     }
 
-    bool passed = Check(SameConfig(expected, actual), L"INI 内容往返一致");
+    passed = Check(SameConfig(expected, actual), L"INI 内容往返一致") && passed;
     passed = Check(GetFileAttributesW((configPath.wstring() + L".tmp").c_str()) ==
                        INVALID_FILE_ATTRIBUTES,
                    L"临时文件已清理") &&

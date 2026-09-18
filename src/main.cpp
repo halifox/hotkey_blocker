@@ -286,12 +286,11 @@ private:
         m_capture.SubclassWindow(GetDlgItem(IDC_HOTKEY_CAPTURE));
 
         const HWND mode = GetDlgItem(IDC_HOTKEY_MODE);
-        SendMessageW(mode, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"拦截全部快捷键"));
-        SendMessageW(mode, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"黑名单：拦截列表中的快捷键"));
-        SendMessageW(mode, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"白名单：仅允许列表中的快捷键"));
+        for (const HotkeyMode modeValue :
+             {HotkeyMode::BlockAll, HotkeyMode::Blacklist, HotkeyMode::Whitelist}) {
+            SendMessageW(mode, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(HotkeyModeText(modeValue)));
+        }
         SendMessageW(mode, CB_SETCURSEL, static_cast<WPARAM>(m_policy.mode), 0);
         RefreshList();
         UpdateControls();
