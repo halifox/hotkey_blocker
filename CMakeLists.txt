@@ -172,7 +172,6 @@ endif ()
 
 install(TARGETS hkb
         RUNTIME DESTINATION .
-        COMPONENT runtime
 )
 
 install(FILES
@@ -180,28 +179,23 @@ install(FILES
         LICENSE
         THIRD_PARTY_NOTICES.md
         DESTINATION .
-        COMPONENT documentation
 )
 install(FILES
         docs/USER_GUIDE.md
         DESTINATION docs
-        COMPONENT documentation
 )
 install(FILES
         third_party/detours/LICENSE.md
         DESTINATION licenses/detours
-        COMPONENT documentation
 )
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     install(TARGETS hotkey_hook hotkey_blocker_injector32
             RUNTIME DESTINATION win32
-            COMPONENT runtime
     )
 else ()
     install(TARGETS hotkey_hook
             RUNTIME DESTINATION .
-            COMPONENT runtime
     )
 
     set(HKB_WIN32_RUNTIME_DIR "${HKB_OUTPUT_DIR}/win32" CACHE PATH
@@ -210,7 +204,6 @@ else ()
             "${HKB_WIN32_RUNTIME_DIR}/HotkeyHook32.dll"
             "${HKB_WIN32_RUNTIME_DIR}/HotkeyBlockerInjector32.exe"
             DESTINATION win32
-            COMPONENT runtime
             OPTIONAL
     )
 endif ()
@@ -232,6 +225,7 @@ set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
 set(CPACK_NSIS_DISPLAY_NAME "Hotkey Blocker")
 set(CPACK_NSIS_PACKAGE_NAME "Hotkey Blocker")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+set(CPACK_NSIS_MUI_FINISHPAGE_RUN "HotkeyBlocker.exe")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
