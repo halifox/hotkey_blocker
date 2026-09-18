@@ -22,6 +22,7 @@
 
 #include <atlbase.h>
 #include <atlapp.h>
+#include <atlctrls.h>
 #include <atlwin.h>
 #include <atldlgs.h>
 
@@ -33,6 +34,7 @@
 #include <vector>
 
 #include "BlockerService.h"
+#include "HotkeyPolicy.h"
 #include "Logger.h"
 #include "PathUtils.h"
 #include "RuleManager.h"
@@ -47,6 +49,345 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
 UINT kTaskbarCreatedMessage = 0;
+
+const wchar_t* HotkeyModeText(HotkeyMode mode) {
+    switch (mode) {
+        case HotkeyMode::Blacklist:
+            return L"黑名单：拦截列表中的快捷键";
+        case HotkeyMode::Whitelist:
+            return L"白名单：仅允许列表中的快捷键";
+        case HotkeyMode::BlockAll:
+        default:
+            return L"拦截全部快捷键";
+    }
+}
+
+std::wstring FormatVirtualKey(uint32_t virtualKey) {
+    if (virtualKey >= L'A' && virtualKey <= L'Z') {
+        return std::wstring(1, static_cast<wchar_t>(virtualKey));
+    }
+    if (virtualKey >= L'0' && virtualKey <= L'9') {
+        return std::wstring(1, static_cast<wchar_t>(virtualKey));
+    }
+    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
+        return L"F" + std::to_wstring(virtualKey - VK_F1 + 1);
+    }
+
+    switch (virtualKey) {
+        case VK_BACK:
+            return L"Backspace";
+        case VK_TAB:
+            return L"Tab";
+        case VK_RETURN:
+            return L"Enter";
+        case VK_ESCAPE:
+            return L"Esc";
+        case VK_SPACE:
+            return L"Space";
+        case VK_PRIOR:
+            return L"PageUp";
+        case VK_NEXT:
+            return L"PageDown";
+        case VK_END:
+            return L"End";
+        case VK_HOME:
+            return L"Home";
+        case VK_LEFT:
+            return L"Left";
+        case VK_UP:
+            return L"Up";
+        case VK_RIGHT:
+            return L"Right";
+        case VK_DOWN:
+            return L"Down";
+        case VK_INSERT:
+            return L"Insert";
+        case VK_DELETE:
+            return L"Delete";
+        case VK_NUMPAD0:
+        case VK_NUMPAD1:
+        case VK_NUMPAD2:
+        case VK_NUMPAD3:
+        case VK_NUMPAD4:
+        case VK_NUMPAD5:
+        case VK_NUMPAD6:
+        case VK_NUMPAD7:
+        case VK_NUMPAD8:
+        case VK_NUMPAD9:
+            return L"Num" + std::to_wstring(virtualKey - VK_NUMPAD0);
+        default:
+            break;
+    }
+
+    const UINT scanCode = MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC);
+    if (scanCode != 0) {
+        wchar_t keyName[64]{};
+        const LONG keyNameResult = GetKeyNameTextW(static_cast<LONG>(scanCode << 16), keyName,
+                                                   static_cast<int>(std::size(keyName)));
+        if (keyNameResult > 0) {
+            return keyName;
+        }
+    }
+    return L"VK_" + std::to_wstring(virtualKey);
+}
+
+std::wstring FormatHotkey(const HotkeySpec& hotkey) {
+    const uint32_t modifiers = NormalizeHotkey(hotkey).modifiers;
+    std::wstring text;
+    if ((modifiers & HotkeyPolicyConstants::kModifierControl) != 0) {
+        text += L"Ctrl+";
+    }
+    if ((modifiers & HotkeyPolicyConstants::kModifierAlt) != 0) {
+        text += L"Alt+";
+    }
+    if ((modifiers & HotkeyPolicyConstants::kModifierShift) != 0) {
+        text += L"Shift+";
+    }
+    if ((modifiers & HotkeyPolicyConstants::kModifierWin) != 0) {
+        text += L"Win+";
+    }
+    text += FormatVirtualKey(hotkey.virtualKey);
+    return text;
+}
+
+std::wstring HotkeyPolicySummary(const HotkeyPolicy& policy) {
+    switch (policy.mode) {
+        case HotkeyMode::Blacklist:
+            return L"黑名单：" + std::to_wstring(policy.hotkeys.size()) + L" 个快捷键";
+        case HotkeyMode::Whitelist:
+            return L"白名单：" + std::to_wstring(policy.hotkeys.size()) + L" 个快捷键";
+        case HotkeyMode::BlockAll:
+        default:
+            return L"拦截全部快捷键";
+    }
+}
+
+bool IsModifierVirtualKey(UINT virtualKey) {
+    switch (virtualKey) {
+        case VK_CONTROL:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+        case VK_MENU:
+        case VK_LMENU:
+        case VK_RMENU:
+        case VK_SHIFT:
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+        case VK_LWIN:
+        case VK_RWIN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint32_t CaptureModifiers() {
+    uint32_t modifiers = 0;
+    if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+        modifiers |= HotkeyPolicyConstants::kModifierControl;
+    }
+    if ((GetKeyState(VK_MENU) & 0x8000) != 0) {
+        modifiers |= HotkeyPolicyConstants::kModifierAlt;
+    }
+    if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+        modifiers |= HotkeyPolicyConstants::kModifierShift;
+    }
+    if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+        (GetKeyState(VK_RWIN) & 0x8000) != 0) {
+        modifiers |= HotkeyPolicyConstants::kModifierWin;
+    }
+    return modifiers;
+}
+
+class HotkeyCapture final : public ATL::CWindowImpl<HotkeyCapture, CEdit> {
+public:
+    HotkeySpec Hotkey() const noexcept {
+        return m_hotkey;
+    }
+
+    bool HasHotkey() const noexcept {
+        return IsValidHotkey(m_hotkey);
+    }
+
+    void Clear() {
+        m_hotkey = {};
+        SetWindowTextW(L"");
+    }
+
+    BEGIN_MSG_MAP(HotkeyCapture)
+        MESSAGE_HANDLER(WM_GETDLGCODE, OnGetDlgCode)
+        MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
+        MESSAGE_HANDLER(WM_SYSKEYDOWN, OnKeyDown)
+        MESSAGE_HANDLER(WM_CHAR, OnIgnoredCharacter)
+        MESSAGE_HANDLER(WM_SYSCHAR, OnIgnoredCharacter)
+    END_MSG_MAP()
+
+private:
+    LRESULT OnGetDlgCode(UINT, WPARAM, LPARAM, BOOL& handled) {
+        handled = TRUE;
+        return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+    }
+
+    LRESULT OnKeyDown(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
+        handled = TRUE;
+        const UINT virtualKey = static_cast<UINT>(wParam);
+        if (IsModifierVirtualKey(virtualKey)) {
+            return 0;
+        }
+
+        HotkeySpec captured;
+        captured.modifiers = CaptureModifiers();
+        captured.virtualKey = virtualKey;
+        if (!IsValidHotkey(captured)) {
+            return 0;
+        }
+        m_hotkey = NormalizeHotkey(captured);
+        const std::wstring text = FormatHotkey(m_hotkey);
+        SetWindowTextW(text.c_str());
+        return 0;
+    }
+
+    LRESULT OnIgnoredCharacter(UINT, WPARAM, LPARAM, BOOL& handled) {
+        handled = TRUE;
+        return 0;
+    }
+
+    HotkeySpec m_hotkey;
+};
+
+class HotkeyPolicyDialog final : public ATL::CDialogImpl<HotkeyPolicyDialog> {
+public:
+    enum { IDD = IDD_HOTKEY_POLICY_DIALOG };
+
+    explicit HotkeyPolicyDialog(HotkeyPolicy policy) : m_policy(std::move(policy)) {
+        NormalizeHotkeyPolicy(m_policy);
+        if (!IsValidHotkeyMode(m_policy.mode)) {
+            m_policy.mode = HotkeyMode::BlockAll;
+        }
+    }
+
+    const HotkeyPolicy& Policy() const noexcept {
+        return m_policy;
+    }
+
+    BEGIN_MSG_MAP(HotkeyPolicyDialog)
+        MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
+        COMMAND_HANDLER(IDC_HOTKEY_MODE, CBN_SELCHANGE, OnModeChanged)
+        COMMAND_HANDLER(IDC_HOTKEY_LIST, LBN_SELCHANGE, OnListSelectionChanged)
+        COMMAND_ID_HANDLER(IDC_HOTKEY_ADD, OnAdd)
+        COMMAND_ID_HANDLER(IDC_HOTKEY_REMOVE, OnRemove)
+        COMMAND_ID_HANDLER(IDOK, OnOk)
+        COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
+    END_MSG_MAP()
+
+private:
+    LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
+        handled = TRUE;
+        m_capture.SubclassWindow(GetDlgItem(IDC_HOTKEY_CAPTURE));
+
+        const HWND mode = GetDlgItem(IDC_HOTKEY_MODE);
+        SendMessageW(mode, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"拦截全部快捷键"));
+        SendMessageW(mode, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"黑名单：拦截列表中的快捷键"));
+        SendMessageW(mode, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"白名单：仅允许列表中的快捷键"));
+        SendMessageW(mode, CB_SETCURSEL, static_cast<WPARAM>(m_policy.mode), 0);
+        RefreshList();
+        UpdateControls();
+        CenterWindow(GetParent());
+        return TRUE;
+    }
+
+    LRESULT OnModeChanged(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        const LRESULT selection = SendMessageW(GetDlgItem(IDC_HOTKEY_MODE), CB_GETCURSEL, 0, 0);
+        if (selection >= 0 && selection <= static_cast<LRESULT>(HotkeyMode::Whitelist)) {
+            m_policy.mode = static_cast<HotkeyMode>(selection);
+        }
+        UpdateControls();
+        return 0;
+    }
+
+    LRESULT OnAdd(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        if (m_policy.mode == HotkeyMode::BlockAll) {
+            return 0;
+        }
+        if (!m_capture.HasHotkey()) {
+            MessageBoxW(L"请先在输入框中按下要配置的快捷键。", L"添加快捷键",
+                        MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        const HotkeySpec hotkey = m_capture.Hotkey();
+        if (!ContainsHotkey(m_policy, hotkey)) {
+            m_policy.hotkeys.push_back(hotkey);
+            NormalizeHotkeyPolicy(m_policy);
+            RefreshList();
+        }
+        m_capture.Clear();
+        m_capture.SetFocus();
+        return 0;
+    }
+
+    LRESULT OnListSelectionChanged(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        UpdateControls();
+        return 0;
+    }
+
+    LRESULT OnRemove(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        const LRESULT selection = SendMessageW(GetDlgItem(IDC_HOTKEY_LIST), LB_GETCURSEL, 0, 0);
+        if (selection >= 0 && selection < static_cast<LRESULT>(m_policy.hotkeys.size())) {
+            m_policy.hotkeys.erase(m_policy.hotkeys.begin() + selection);
+            RefreshList();
+        }
+        return 0;
+    }
+
+    LRESULT OnOk(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        NormalizeHotkeyPolicy(m_policy);
+        if (!ValidateHotkeyPolicy(m_policy)) {
+            MessageBoxW(L"快捷键策略无效，请检查配置。", L"保存快捷键策略",
+                        MB_OK | MB_ICONERROR);
+            return 0;
+        }
+        EndDialog(IDOK);
+        return 0;
+    }
+
+    LRESULT OnCancel(WORD, WORD, HWND, BOOL& handled) {
+        handled = TRUE;
+        EndDialog(IDCANCEL);
+        return 0;
+    }
+
+    void RefreshList() {
+        const HWND list = GetDlgItem(IDC_HOTKEY_LIST);
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        for (const HotkeySpec& hotkey : m_policy.hotkeys) {
+            const std::wstring text = FormatHotkey(hotkey);
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        }
+        UpdateControls();
+    }
+
+    void UpdateControls() {
+        const bool editable = m_policy.mode != HotkeyMode::BlockAll;
+        ::EnableWindow(GetDlgItem(IDC_HOTKEY_LIST), editable);
+        ::EnableWindow(GetDlgItem(IDC_HOTKEY_CAPTURE), editable);
+        ::EnableWindow(GetDlgItem(IDC_HOTKEY_ADD), editable);
+        const LRESULT selection = SendMessageW(GetDlgItem(IDC_HOTKEY_LIST), LB_GETCURSEL, 0, 0);
+        ::EnableWindow(GetDlgItem(IDC_HOTKEY_REMOVE),
+                       editable && selection >= 0 &&
+                           selection < static_cast<LRESULT>(m_policy.hotkeys.size()));
+    }
+
+    HotkeyPolicy m_policy;
+    HotkeyCapture m_capture;
+};
 
 }  // namespace
 
@@ -176,6 +517,9 @@ private:
                 break;
             case IDC_ADD_FOLDER:
                 AddFolderApplication();
+                break;
+            case IDC_CONFIGURE_HOTKEY:
+                ConfigureSelectedApplication();
                 break;
             case IDC_DELETE_APP:
                 DeleteSelectedApplication();
@@ -459,8 +803,9 @@ private:
             row.enabled = rule.enabled;
             row.status = AppStatusText(AppStatus::Waiting);
             row.imageIndex = FileIconIndex(rule.path);
+            row.detail = HotkeyPolicySummary(rule.hotkeyPolicy);
             if (rule.kind == RuleKind::Directory) {
-                row.detail = L"拦截文件夹内所有 EXE";
+                row.detail += L"；拦截文件夹内所有 EXE";
             }
 
             const auto state = std::find_if(
@@ -678,6 +1023,34 @@ private:
         const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
         if (!m_ruleManager.SetEnabled(row.path, !row.enabled)) {
             ShowError(L"修改应用状态失败", m_ruleManager.LastError());
+            return;
+        }
+        m_blockerService.UpdateRules(m_ruleManager.Rules());
+        RefreshListView(true);
+    }
+
+    void ConfigureSelectedApplication() {
+        const int index = SelectedIndex();
+        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
+            ShowError(L"配置快捷键策略失败", L"请先选择一个应用");
+            return;
+        }
+
+        const std::wstring path = m_renderedRows[static_cast<std::size_t>(index)].path;
+        const auto rule = std::find_if(
+            m_ruleManager.Rules().begin(), m_ruleManager.Rules().end(),
+            [&path](const AppRule& candidate) { return PathUtils::SamePath(candidate.path, path); });
+        if (rule == m_ruleManager.Rules().end()) {
+            ShowError(L"配置快捷键策略失败", L"找不到所选应用规则");
+            return;
+        }
+
+        HotkeyPolicyDialog dialog(rule->hotkeyPolicy);
+        if (dialog.DoModal(m_hWnd) != IDOK) {
+            return;
+        }
+        if (!m_ruleManager.SetHotkeyPolicy(path, dialog.Policy())) {
+            ShowError(L"配置快捷键策略失败", m_ruleManager.LastError());
             return;
         }
         m_blockerService.UpdateRules(m_ruleManager.Rules());
