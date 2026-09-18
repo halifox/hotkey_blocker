@@ -29,9 +29,6 @@ jobs:
         shell: pwsh
         env:
           HKB_RELEASE_VERSION: ${{ inputs.version }}
-          HKB_SIGN_CERTIFICATE_BASE64: ${{ secrets.HKB_SIGN_CERTIFICATE_BASE64 }}
-          HKB_SIGN_CERTIFICATE_PASSWORD: ${{ secrets.HKB_SIGN_CERTIFICATE_PASSWORD }}
-          HKB_SIGN_TIMESTAMP_URL: ${{ vars.HKB_SIGN_TIMESTAMP_URL }}
         run: |
           $version = $env:HKB_RELEASE_VERSION
           if (-not $version) {
@@ -40,21 +37,7 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
             throw "Release version must use MAJOR.MINOR.PATCH, got: $version"
           }
-          if (-not $env:HKB_SIGN_CERTIFICATE_BASE64) {
-            throw 'Release signing certificate is not configured. Set HKB_SIGN_CERTIFICATE_BASE64.'
-          }
-
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'hotkey-blocker-signing.pfx'
-          try {
-            [IO.File]::WriteAllBytes(
-              $certificatePath,
-              [Convert]::FromBase64String($env:HKB_SIGN_CERTIFICATE_BASE64))
-            .\scripts\build.ps1 -Architecture x64 -Configuration Release -Package `
-              -Version $version -SignCertificatePath $certificatePath `
-              -SignCertificatePassword $env:HKB_SIGN_CERTIFICATE_PASSWORD -RequireSignature
-          } finally {
-            Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
-          }
+          .\scripts\build.ps1 -Architecture x64 -Configuration Release -Package -Version $version
 
       - name: List package contents
         shell: pwsh

@@ -22,8 +22,9 @@
 
 - 修复托盘初始化失败后的状态处理。
 - 修复卸载时未清理 `HotkeyBlocker` 开机启动注册表值的问题。
+- 修复卸载时未删除 `%LOCALAPPDATA%\HotkeyBlocker` 配置和日志目录的问题。
 - 恢复配置、注入和 BlockerService 集成测试，并在 CI 中执行 CTest。
 
 ### Security
 
-- Release 工作流要求使用 Authenticode 证书签名主程序、DLL、辅助程序和安装包。
+- Release 包生成 SHA-256 校验文件，便于用户核对下载文件的完整性。
