@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.architecture }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, x86]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build.ps1 -Architecture ${{ matrix.architecture }} -Configuration Release
+
+      - name: Verify runtime artifacts
+        shell: pwsh
+        run: |
+          $root = "out/bin/${{ matrix.architecture }}-release"
+          $hookName = if ('${{ matrix.architecture }}' -eq 'x64') { 'HotkeyHook64.dll' } else { 'HotkeyHook32.dll' }
+          $required = @(
+            "$root/HotkeyBlocker.exe",
+            "$root/$hookName"
+          )
+          if ('${{ matrix.architecture }}' -eq 'x86') {
+            $required += "$root/HotkeyBlockerInjector32.exe"
+          }
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Missing build artifact: $file"
+            }
+          }
+
+      - name: Check patch whitespace
+        shell: pwsh
+        run: git diff --check

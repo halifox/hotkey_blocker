@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(HotkeyBlocker VERSION 1.0.0 LANGUAGES CXX RC)
+set(HKB_PROJECT_VERSION "1.0.0" CACHE STRING "Hotkey Blocker project version")
+project(HotkeyBlocker VERSION ${HKB_PROJECT_VERSION} LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(HKB_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin" CACHE PATH
         "Directory for the runtime artifacts")
@@ -23,6 +25,12 @@ function(hkb_configure_target target)
         target_compile_options("${target}" PRIVATE /utf-8)
     endif ()
 endfunction()
+
+configure_file(
+        "${CMAKE_SOURCE_DIR}/src/version.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
+        @ONLY
+)
 
 add_library(detours STATIC
         third_party/detours/src/detours.cpp
@@ -45,6 +53,7 @@ add_executable(hkb WIN32
         src/StartupManager.cpp
         src/main.cpp
         src/app.rc
+        "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
 )
 target_include_directories(hkb PRIVATE third_party/wtl src)
 hkb_configure_target(hkb)
@@ -97,6 +106,24 @@ install(TARGETS hkb
         COMPONENT runtime
 )
 
+install(FILES
+        README.md
+        LICENSE
+        THIRD_PARTY_NOTICES.md
+        DESTINATION .
+        COMPONENT documentation
+)
+install(FILES
+        docs/USER_GUIDE.md
+        DESTINATION docs
+        COMPONENT documentation
+)
+install(FILES
+        third_party/detours/LICENSE.md
+        DESTINATION licenses/detours
+        COMPONENT documentation
+)
+
 if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     install(TARGETS hotkey_hook hotkey_blocker_injector32
             RUNTIME DESTINATION win32
@@ -123,15 +150,27 @@ set(CPACK_GENERATOR NSIS)
 set(CPACK_PACKAGE_NAME HotkeyBlocker)
 set(CPACK_PACKAGE_VENDOR "Hotkey Blocker")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Block applications from registering global hotkeys")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/halifox/hkb")
+set(CPACK_PACKAGE_CONTACT "Hotkey Blocker contributors")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Hotkey Blocker")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${PROJECT_VERSION}-${HKB_ARCH_LABEL}")
 set(CPACK_PACKAGE_EXECUTABLES "HotkeyBlocker" "Hotkey Blocker")
 set(CPACK_CREATE_DESKTOP_LINKS HotkeyBlocker)
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
+set(CPACK_COMPONENTS_ALL runtime documentation)
+set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "Hotkey Blocker runtime")
+set(CPACK_COMPONENT_RUNTIME_DESCRIPTION "The Hotkey Blocker executable and hook components.")
+set(CPACK_COMPONENT_DOCUMENTATION_DISPLAY_NAME "Documentation and licenses")
+set(CPACK_COMPONENT_DOCUMENTATION_DESCRIPTION "User documentation, project license, and third-party notices.")
+set(CPACK_COMPONENT_DOCUMENTATION_REQUIRED TRUE)
 set(CPACK_NSIS_DISPLAY_NAME "Hotkey Blocker")
 set(CPACK_NSIS_PACKAGE_NAME "Hotkey Blocker")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hkb/blob/master/docs/USER_GUIDE.md")
+set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hkb")
 
 include(CPack)

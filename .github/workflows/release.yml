@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '三段数字版本，例如 1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package x64 installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build installer
+        shell: pwsh
+        env:
+          HKB_RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:HKB_RELEASE_VERSION
+          if (-not $version) {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Release version must use MAJOR.MINOR.PATCH, got: $version"
+          }
+          .\scripts\build.ps1 -Architecture x64 -Configuration Release -Package -Version $version
+
+      - name: List package contents
+        shell: pwsh
+        run: Get-ChildItem -LiteralPath out/packages -File | Select-Object Name, Length
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HotkeyBlocker-${{ github.ref_name }}
+          path: out/packages/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem -LiteralPath out/packages -File | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME @assets --generate-notes --verify-tag

@@ -1,0 +1,35 @@
+#include <winresrc.h>
+
+#define VER_FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+#define VER_PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+#define VER_FILEVERSION_STR "@PROJECT_VERSION@.0\0"
+#define VER_PRODUCTVERSION_STR "@PROJECT_VERSION@.0\0"
+
+1 VERSIONINFO
+FILEVERSION VER_FILEVERSION
+PRODUCTVERSION VER_PRODUCTVERSION
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Hotkey Blocker contributors\0"
+            VALUE "FileDescription", "Block applications from registering global hotkeys\0"
+            VALUE "FileVersion", VER_FILEVERSION_STR
+            VALUE "InternalName", "HotkeyBlocker\0"
+            VALUE "LegalCopyright", "Copyright (c) Hotkey Blocker contributors\0"
+            VALUE "OriginalFilename", "HotkeyBlocker.exe\0"
+            VALUE "ProductName", "Hotkey Blocker\0"
+            VALUE "ProductVersion", VER_PRODUCTVERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

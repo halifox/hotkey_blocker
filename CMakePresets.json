@@ -1,0 +1,75 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "x64-release",
+      "displayName": "x64 Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HKB_OUTPUT_DIR": "${sourceDir}/out/bin/x64-release",
+        "HKB_WIN32_RUNTIME_DIR": "${sourceDir}/out/bin/x86-release"
+      }
+    },
+    {
+      "name": "x64-debug",
+      "displayName": "x64 Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HKB_OUTPUT_DIR": "${sourceDir}/out/bin/x64-debug",
+        "HKB_WIN32_RUNTIME_DIR": "${sourceDir}/out/bin/x86-debug"
+      }
+    },
+    {
+      "name": "x86-release",
+      "displayName": "x86 Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HKB_OUTPUT_DIR": "${sourceDir}/out/bin/x86-release"
+      }
+    },
+    {
+      "name": "x86-debug",
+      "displayName": "x86 Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HKB_OUTPUT_DIR": "${sourceDir}/out/bin/x86-debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "x64-release",
+      "configurePreset": "x64-release"
+    },
+    {
+      "name": "x64-debug",
+      "configurePreset": "x64-debug"
+    },
+    {
+      "name": "x86-release",
+      "configurePreset": "x86-release"
+    },
+    {
+      "name": "x86-debug",
+      "configurePreset": "x86-debug"
+    }
+  ]
+}
