@@ -504,19 +504,19 @@ void BlockerService::Log(const std::wstring& message) const {
 const wchar_t* AppStatusText(AppStatus status) {
     switch (status) {
         case AppStatus::Waiting:
-            return L"等待启动";
+            return L"等待程序启动";
         case AppStatus::Injecting:
-            return L"正在处理";
+            return L"正在启用拦截";
         case AppStatus::RestartRequired:
-            return L"需要重启";
+            return L"重启程序后生效";
         case AppStatus::Blocked:
-            return L"已拦截";
+            return L"拦截已生效";
         case AppStatus::PartiallyBlocked:
-            return L"部分拦截";
+            return L"部分拦截生效";
         case AppStatus::InjectionFailed:
-            return L"注入失败";
+            return L"启用拦截失败";
         case AppStatus::PathMissing:
-            return L"路径不存在";
+            return L"程序路径不存在";
         case AppStatus::Disabled:
             return L"已停用";
         default:

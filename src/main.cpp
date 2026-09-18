@@ -355,7 +355,7 @@ private:
             ListView_SetImageList(m_listView, m_systemImageList, LVSIL_SMALL);
         }
         constexpr int kEnabledColumnWidth = 55;
-        constexpr int kStatusColumnWidth = 89;
+        constexpr int kStatusColumnWidth = 205;
         RECT listClientRect{};
         ::GetClientRect(m_listView, &listClientRect);
         const int listWidth = listClientRect.right - listClientRect.left;
@@ -363,7 +363,7 @@ private:
         const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
         InsertColumn(0, L"目标路径", pathColumnWidth, LVCFMT_LEFT);
         InsertColumn(1, L"启用", kEnabledColumnWidth, LVCFMT_CENTER);
-        InsertColumn(2, L"状态", kStatusColumnWidth, LVCFMT_CENTER);
+        InsertColumn(2, L"拦截状态", kStatusColumnWidth, LVCFMT_CENTER);
 
         const HWND header = ListView_GetHeader(m_listView);
         if (header != nullptr) {
