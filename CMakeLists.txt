@@ -36,6 +36,12 @@ configure_file(
         @ONLY
 )
 
+configure_file(
+        "${CMAKE_SOURCE_DIR}/src/Version.h.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/Version.h"
+        @ONLY
+)
+
 add_library(detours STATIC
         third_party/detours/src/detours.cpp
         third_party/detours/src/modules.cpp
@@ -56,12 +62,13 @@ add_executable(hkb WIN32
         src/RemoteInjector.cpp
         src/RuleManager.cpp
         src/StartupManager.cpp
+        src/UpdateChecker.cpp
         src/Win32Support.cpp
         src/main.cpp
         src/app.rc
         "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
 )
-target_include_directories(hkb PRIVATE third_party/wtl src)
+target_include_directories(hkb PRIVATE third_party/wtl src "${CMAKE_CURRENT_BINARY_DIR}")
 hkb_configure_target(hkb)
 if (MSVC)
     target_link_options(hkb PRIVATE
@@ -74,6 +81,7 @@ target_link_libraries(hkb PRIVATE
         ole32
         shell32
         user32
+        winhttp
 )
 
 add_library(hotkey_hook SHARED

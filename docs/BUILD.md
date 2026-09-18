@@ -90,6 +90,8 @@ Windows 可能对从互联网下载的未签名程序显示未知发布者或 Sm
 
 GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。使用 `-Package` 时，脚本会在 `out/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
 
+程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀并传入 `-Version`；该版本会同时写入程序“关于”窗口、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
+
 ## 完整安装包
 
 x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。推荐使用：

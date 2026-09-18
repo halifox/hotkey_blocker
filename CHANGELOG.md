@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/)，版本号遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [未发布]
+
+- 增加由构建版本驱动的“关于”窗口和程序内版本显示。
+- 增加后台 GitHub Release 版本检查、托盘通知和手动检查入口。
+
 ## [1.0.1] - 2026-09-18
 
 - 增加按应用保存的快捷键策略：拦截全部、黑名单和白名单。

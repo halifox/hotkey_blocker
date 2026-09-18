@@ -1,0 +1,8 @@
+#pragma once
+
+namespace hkb::version {
+
+inline constexpr wchar_t kString[] = L"@PROJECT_VERSION@";
+inline constexpr wchar_t kTag[] = L"v@PROJECT_VERSION@";
+
+}  // namespace hkb::version
