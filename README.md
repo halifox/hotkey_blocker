@@ -63,6 +63,8 @@ Hotkey Blocker 是一个 Windows 桌面工具，用于阻止选定应用通过�
 
 黑名单或白名单可以添加固定组合键，例如 `Ctrl+Alt+A`。快捷键按 Ctrl、Alt、Shift、Win 修饰键和虚拟键匹配；`MOD_NOREPEAT` 不参与匹配。
 
+每个策略最多保存 128 个快捷键，重复组合键会自动去重。列表中的每项由修饰键和一个主键组成；推荐使用配置窗口捕获组合键，不要手工猜测虚拟键数值。
+
 黑名单为空时表示放行全部快捷键；白名单为空时表示拦截全部快捷键。修改策略不会撤销目标应用已经成功注册的快捷键，因此修改后需要重启目标应用。
 
 ### 自动匹配 x86 / x64
@@ -246,7 +248,7 @@ Hotkey Blocker 使用当前用户的本地应用数据目录：
 | `%LOCALAPPDATA%\HotkeyBlocker\logs\hkb.log` | 进程监控、架构检测、注入结果和错误日志 |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HotkeyBlocker` | 可选的登录时启动项 |
 
-配置文件使用 UTF-8 INI 格式。当前配置版本为 2；旧版本规则会默认使用“拦截全部”策略。每个应用规则的快捷键策略使用 `HotkeyMode` 和编号的 `Hotkey.N` 项保存。
+配置文件使用 UTF-8 INI 格式。当前配置版本为 2；版本 1 配置没有策略字段，读取后会按“拦截全部”处理。每个应用规则的快捷键策略使用 `HotkeyMode` 和编号的 `Hotkey.N` 项保存：`HotkeyMode` 的值为 `block_all`、`blacklist` 或 `whitelist`，`Hotkey.N` 使用“修饰键数值:虚拟键数值”格式，例如 `3:65` 表示 `Ctrl+Alt+A`。推荐通过配置窗口修改策略。
 
 修改配置文件前建议先退出程序并备份。要恢复全部规则，可以退出 Hotkey Blocker 后备份并删除 `config.ini`；已经注入到目标进程中的 Hook 仍需通过重启目标应用来解除。
 

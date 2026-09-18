@@ -82,7 +82,7 @@ ctest --test-dir out/build/x64-release --output-on-failure
 ctest --test-dir out/build/x86-release --output-on-failure
 ```
 
-测试覆盖配置读写、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
+测试覆盖配置读写、快捷键策略判定与持久化、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
 
 本项目的本地构建和正式发布均不使用 Authenticode 签名。发布工作流不会读取证书，也不会对主程序、Hook DLL、x86 注入辅助程序或安装包执行签名。
 
