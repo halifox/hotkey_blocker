@@ -28,7 +28,6 @@ BEGIN
     END
     POPUP "帮助(&H)"
     BEGIN
-        MENUITEM "关于...", ID_TRAY_ABOUT
         MENUITEM "检查更新...", ID_TRAY_CHECK_UPDATES
     END
 END
@@ -52,26 +51,11 @@ BEGIN
     PUSHBUTTON      "取消", IDCANCEL, 216, 183, 56, 14
 END
 
-IDD_ABOUT_DIALOG DIALOGEX 0, 0, 250, 104
-STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME
-CAPTION "关于 Hotkey Blocker"
-FONT 9, "Segoe UI"
-BEGIN
-    ICON            IDI_APP_ICON, IDC_STATIC, 8, 8, 32, 32
-    LTEXT           "Hotkey Blocker", IDC_STATIC, 48, 8, 190, 14
-    LTEXT           "", IDC_ABOUT_VERSION, 48, 26, 190, 12
-    LTEXT           "用于拦截应用注册全局快捷键。", IDC_STATIC, 8, 48, 234, 12
-    LTEXT           "可通过 GitHub Release 检查最新版本。", IDC_ABOUT_STATUS, 8, 62, 234, 12
-    PUSHBUTTON      "检查更新", IDC_ABOUT_CHECK_UPDATES, 8, 82, 72, 14
-    DEFPUSHBUTTON   "关闭", IDCANCEL, 182, 82, 60, 14
-END
-
 IDR_TRAY_MENU MENU
 BEGIN
     POPUP "Tray"
     BEGIN
         MENUITEM "显示窗口", ID_TRAY_SHOW
-        MENUITEM "关于", ID_TRAY_ABOUT
         MENUITEM "检查更新", ID_TRAY_CHECK_UPDATES
         MENUITEM SEPARATOR
         MENUITEM "退出", ID_TRAY_EXIT

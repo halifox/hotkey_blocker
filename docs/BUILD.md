@@ -87,7 +87,7 @@ Windows 可能对从互联网下载的未签名程序显示未知发布者或 Sm
 
 GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。Release 工作流会在 `out/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
 
-程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀，并将版本通过 `-DHKB_PROJECT_VERSION` 传给 x86 和 x64 配置；该版本会同时写入程序“关于”窗口、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
+程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀，并将版本通过 `-DHKB_PROJECT_VERSION` 传给 x86 和 x64 配置；该版本会同时写入主窗口标题栏、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
 
 ## 完整安装包
 

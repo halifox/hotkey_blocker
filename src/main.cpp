@@ -28,7 +28,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <functional>
 #include <iterator>
 #include <memory>
 #include <new>
@@ -410,75 +409,6 @@ private:
     HotkeyCapture m_capture;
 };
 
-class AboutDialog final : public ATL::CDialogImpl<AboutDialog> {
-public:
-    enum { IDD = IDD_ABOUT_DIALOG };
-    using CheckHandler = std::function<void()>;
-
-    HWND Window() const noexcept {
-        return m_hWnd;
-    }
-
-    void SetCheckHandler(CheckHandler handler) {
-        m_checkHandler = std::move(handler);
-    }
-
-    void SetChecking(bool checking) {
-        if (m_hWnd == nullptr) {
-            return;
-        }
-        ::EnableWindow(GetDlgItem(IDC_ABOUT_CHECK_UPDATES), checking ? FALSE : TRUE);
-        if (checking) {
-            SetStatus(L"正在检查更新...");
-        }
-    }
-
-    void SetStatus(const std::wstring& status) {
-        if (m_hWnd != nullptr) {
-            ::SetDlgItemTextW(m_hWnd, IDC_ABOUT_STATUS, status.c_str());
-        }
-    }
-
-    BEGIN_MSG_MAP(AboutDialog)
-        MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
-        COMMAND_ID_HANDLER(IDC_ABOUT_CHECK_UPDATES, OnCheckUpdates)
-        COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
-        MESSAGE_HANDLER(WM_CLOSE, OnClose)
-    END_MSG_MAP()
-
-private:
-    LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
-        handled = TRUE;
-        const std::wstring version = L"版本 " + std::wstring(hkb::version::kString);
-        ::SetDlgItemTextW(m_hWnd, IDC_ABOUT_VERSION, version.c_str());
-        SetStatus(L"可检查 GitHub 最新版本。");
-        CenterWindow(GetParent());
-        return TRUE;
-    }
-
-    LRESULT OnCheckUpdates(WORD, WORD, HWND, BOOL& handled) {
-        handled = TRUE;
-        if (m_checkHandler) {
-            m_checkHandler();
-        }
-        return 0;
-    }
-
-    LRESULT OnCancel(WORD, WORD, HWND, BOOL& handled) {
-        handled = TRUE;
-        EndDialog(IDCANCEL);
-        return 0;
-    }
-
-    LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
-        handled = TRUE;
-        EndDialog(IDCANCEL);
-        return 0;
-    }
-
-    CheckHandler m_checkHandler;
-};
-
 }  // namespace
 
 class MainWindow final : public ATL::CDialogImpl<MainWindow>, public CMessageFilter {
@@ -525,6 +455,8 @@ private:
 
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
+        const std::wstring title = L"Hotkey Blocker - " + std::wstring(hkb::version::kString);
+        ::SetWindowTextW(m_hWnd, title.c_str());
         m_listView = GetDlgItem(IDC_APP_LIST);
         InitializeListView();
 
@@ -571,7 +503,7 @@ private:
             ::ShowWindow(m_hWnd, SW_HIDE);
         }
         if (m_trayIconAdded) {
-            StartUpdateCheck(false, nullptr);
+            StartUpdateCheck(false);
         }
         return TRUE;
     }
@@ -604,16 +536,9 @@ private:
         }
 
         m_updateCheckRunning = false;
-        AboutDialog* aboutDialog = m_aboutDialog;
-        if (aboutDialog != nullptr) {
-            aboutDialog->SetChecking(false);
-        }
 
         if (!result->error.empty()) {
             m_logger.Error(L"检查更新失败：" + result->error);
-            if (aboutDialog != nullptr) {
-                aboutDialog->SetStatus(L"检查更新失败。");
-            }
             if (m_updateCheckInteractive) {
                 ShowError(L"检查更新失败", result->error);
             }
@@ -623,17 +548,11 @@ private:
 
         if (result->updateAvailable) {
             m_pendingReleaseUrl = result->releaseUrl;
-            const std::wstring status = L"发现新版本 " + result->latestVersion + L"。";
-            if (aboutDialog != nullptr) {
-                aboutDialog->SetStatus(status);
-            }
-
             if (m_updateCheckInteractive) {
                 const std::wstring message =
                     L"发现新版本 " + result->latestVersion + L"。\n当前版本：" +
                     result->currentVersion + L"\n\n是否打开下载页面？";
-                const HWND owner = aboutDialog != nullptr ? aboutDialog->Window() : m_hWnd;
-                if (::MessageBoxW(owner, message.c_str(), L"发现新版本",
+                if (::MessageBoxW(m_hWnd, message.c_str(), L"发现新版本",
                                   MB_YESNO | MB_ICONINFORMATION) == IDYES) {
                     OpenPendingRelease();
                 }
@@ -644,14 +563,7 @@ private:
             }
         } else if (m_updateCheckInteractive) {
             const std::wstring message = L"当前已经是最新版本（" + result->currentVersion + L"）。";
-            const HWND owner = aboutDialog != nullptr ? aboutDialog->Window() : m_hWnd;
-            ::MessageBoxW(owner, message.c_str(), L"检查更新",
-                          MB_OK | MB_ICONINFORMATION);
-            if (aboutDialog != nullptr) {
-                aboutDialog->SetStatus(L"当前已经是最新版本。");
-            }
-        } else if (aboutDialog != nullptr) {
-            aboutDialog->SetStatus(L"当前已经是最新版本。");
+            ::MessageBoxW(m_hWnd, message.c_str(), L"检查更新", MB_OK | MB_ICONINFORMATION);
         }
 
         m_updateCheckInteractive = false;
@@ -683,11 +595,8 @@ private:
             case ID_MAIN_AUTOSTART:
                 UpdateAutoStart();
                 break;
-            case ID_TRAY_ABOUT:
-                ShowAboutDialog();
-                break;
             case ID_TRAY_CHECK_UPDATES:
-                StartUpdateCheck(true, nullptr);
+                StartUpdateCheck(true);
                 break;
             case ID_TRAY_SHOW:
                 ShowFromTray();
@@ -951,19 +860,7 @@ private:
         DestroyWindow();
     }
 
-    void ShowAboutDialog() {
-        AboutDialog dialog;
-        m_aboutDialog = &dialog;
-        dialog.SetCheckHandler([this, &dialog] {
-            StartUpdateCheck(true, &dialog);
-        });
-        dialog.DoModal(m_hWnd);
-        if (m_aboutDialog == &dialog) {
-            m_aboutDialog = nullptr;
-        }
-    }
-
-    void StartUpdateCheck(bool interactive, AboutDialog* aboutDialog) {
+    void StartUpdateCheck(bool interactive) {
         if (m_updateCheckRunning) {
             if (interactive) {
                 ::MessageBoxW(m_hWnd, L"版本检查正在进行，请稍候。", L"检查更新",
@@ -973,10 +870,6 @@ private:
         }
 
         m_updateCheckInteractive = interactive;
-        m_aboutDialog = aboutDialog;
-        if (aboutDialog != nullptr) {
-            aboutDialog->SetChecking(true);
-        }
         m_updateCheckRunning = true;
 
         const HWND window = m_hWnd;
@@ -995,10 +888,6 @@ private:
         }
 
         m_updateCheckRunning = false;
-        if (aboutDialog != nullptr) {
-            aboutDialog->SetChecking(false);
-            aboutDialog->SetStatus(L"无法启动版本检查。");
-        }
         if (interactive) {
             ShowError(L"检查更新失败", L"无法启动版本检查线程。");
         }
@@ -1533,7 +1422,6 @@ private:
     HICON m_largeIcon = nullptr;
     HICON m_smallIcon = nullptr;
     UpdateChecker m_updateChecker;
-    AboutDialog* m_aboutDialog = nullptr;
     std::wstring m_pendingReleaseUrl;
     bool m_updateCheckRunning = false;
     bool m_updateCheckInteractive = false;
