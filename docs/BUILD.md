@@ -93,39 +93,13 @@ GitHub Release 工作流不需要任何证书或签名相关的 Repository Secre
 
 x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。下面以 `1.0.0` 为例；发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，传入去掉 `v` 的版本号。
 
-下面的命令都从仓库根目录执行；x86 和 x64 命令分别在对应架构的 Developer PowerShell 中运行。
+从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `out/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
 
 ```powershell
-$version = '1.0.0'
-$env:VCPKG_ROOT = 'C:/dev/vcpkg'
-
-# 在 x86 Developer PowerShell 中构建安装包需要的 32 位组件
-cmake --preset x86-release "-DHKB_PROJECT_VERSION=$version"
-cmake --build --preset x86-release --parallel
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION=1.0.0 -P cmake/package-x64.cmake
 ```
 
-```powershell
-# 在 x64 Developer PowerShell 中，重新设置以下变量
-$version = '1.0.0'
-$env:VCPKG_ROOT = 'C:/dev/vcpkg'
-cmake --preset x64-release "-DHKB_PROJECT_VERSION=$version"
-cmake --build --preset x64-release --parallel
-cmake --build --preset x64-release --target package --parallel
-
-New-Item -ItemType Directory -Path out/packages -Force | Out-Null
-$packageName = "HotkeyBlocker-$version-x64.exe"
-Copy-Item "out/build/x64-release-vcpkg/$packageName" out/packages -Force
-$hash = (Get-FileHash "out/packages/$packageName" -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  $packageName" | Set-Content "out/packages/$packageName.sha256" -Encoding ASCII
-```
-
-按以下顺序准备安装包：
-
-1. 构建 x86 Release 组件。
-2. 构建 x64 Release 主程序和 Hook。
-3. 使用 CPack 生成 NSIS 安装程序。
-4. 复制安装包到 `out/packages/`。
-5. 生成同名 `.sha256` 校验文件。
+把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `out/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
 
 卸载程序会先结束正在运行的主程序，再删除 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HotkeyBlocker`，并同步删除 `%LOCALAPPDATA%\HotkeyBlocker` 配置和日志目录，避免留下失效的开机启动项或用户数据。
 
@@ -159,7 +133,7 @@ $hash = (Get-FileHash "out/packages/$packageName" -Algorithm SHA256).Hash.ToLowe
 
 ### x64 构建时找不到 32 位组件
 
-不要只构建 x64 后就生成安装包。先构建 `x86-release`，确保 `out/bin/x86-release/` 中的 Hook DLL 和注入辅助程序存在，再构建 x64 并运行 CPack。
+使用上面的 `cmake -P cmake/package-x64.cmake` 入口打包，它会先构建 `out/bin/x86-release/` 中的 Hook DLL 和注入辅助程序，再构建 x64 并运行 CPack。若手动调用 x64 的 `package` 目标，则需要先自行生成这些 x86 组件。
 
 ### 注入失败
 

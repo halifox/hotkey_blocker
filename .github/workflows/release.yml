@@ -51,7 +51,7 @@ jobs:
         with:
           arch: x86
 
-      - name: Configure and build x86 runtime
+      - name: Configure and build x86 package components
         shell: pwsh
         run: |
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
@@ -60,7 +60,7 @@ jobs:
           $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
           cmake --preset x86-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset x86-release --parallel
+          cmake --build --preset x86-release --target hotkey_hook hotkey_blocker_injector32 --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload x86 runtime components

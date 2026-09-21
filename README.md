@@ -91,30 +91,15 @@
 
 ### 命令行构建
 
-在与目标架构匹配的 Visual Studio Developer PowerShell 中，从仓库根目录执行。先设置本机 vcpkg 根目录：
+从 Visual Studio Developer PowerShell 的仓库根目录运行下面这条命令，即可从干净状态构建并打包完整的 x64 安装程序：
 
 ```powershell
-$env:VCPKG_ROOT = 'C:/dev/vcpkg'
-cmake --preset x64-release
-cmake --build --preset x64-release --parallel
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION=1.0.0 -P cmake/package-x64.cmake
 ```
 
-不指定 `--target` 会构建全部目标，包括 Hook DLL。
+把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录。该命令会构建 x86 Hook DLL 和注入辅助程序、x64 主程序和 Hook DLL，然后生成包含这些文件的 x64 NSIS 安装包及 SHA-256 文件。单架构日常构建仍可使用 `x86-release`、`x86-debug`、`x64-release` 和 `x64-debug` CMake presets。
 
-常用构建命令：
-
-```powershell
-# x86 发布版（在 x86 Developer PowerShell 中）
-$env:VCPKG_ROOT = 'C:/dev/vcpkg'
-cmake --preset x86-release
-cmake --build --preset x86-release --parallel
-
-# x64 调试版（在 x64 Developer PowerShell 中）
-cmake --preset x64-debug
-cmake --build --preset x64-debug --parallel
-```
-
-构建 x64 安装包时，先构建 x86 Release 运行组件，再构建 x64 Release；完整步骤见 [构建、测试和打包](docs/BUILD.md)。
+完整步骤和依赖要求见 [构建、测试和打包](docs/BUILD.md)。
 
 构建测试：
 
