@@ -4,24 +4,31 @@ Hotkey Blocker 的自有代码以仓库根目录的 [MIT License](LICENSE) 发�
 
 ## Microsoft Detours
 
-- 位置：`third_party/detours/`
-- 版本：以该目录中随源码分发的版本为准
+- 来源：vcpkg `detours` port；版本由 `vcpkg.json` 中的 baseline 固定
 - 版权所有：Microsoft Corporation
 - 许可证：MIT License
-- 源码许可证文本：[third_party/detours/LICENSE.md](third_party/detours/LICENSE.md)
-- 安装包许可证文本：`licenses/detours/LICENSE.md`
-
-Detours 的源文件和许可证头部应随分发包保留。
+- 安装包许可证文本：`licenses/detours/copyright`（来自 vcpkg 包）
 
 ## Windows Template Library（WTL）
 
-- 位置：`third_party/wtl/`
-- 版本：WTL 10.x，具体版本见各头文件头部声明
+- 来源：vcpkg `wtl` port；版本由 `vcpkg.json` 中的 baseline 固定
 - 版权所有：Microsoft Corporation、WTL Team
 - 许可证：Microsoft Public License（MS-PL）
 - 许可证标识：`MS-PL`
+- 安装包许可证文本：`licenses/wtl/copyright`（来自 vcpkg 包）
 
-WTL 各头文件包含原始版权和许可证声明。本项目未移除这些声明。MS-PL 的标准文本可从 [Open Source Initiative](https://opensource.org/license/ms-pl-html) 获取。
+MS-PL 的标准文本可从 [Open Source Initiative](https://opensource.org/license/ms-pl-html) 获取。
+
+## CPR、libcurl、nlohmann/json 与 zlib
+
+主程序静态链接以下 vcpkg 依赖，版本由仓库根目录的 `vcpkg.json` 和其 baseline 固定：
+
+- CPR：MIT License；安装包保留 `licenses/cpr/copyright`。
+- libcurl：curl License；安装包保留 `licenses/curl/copyright`。
+- nlohmann/json：MIT License；安装包保留 `licenses/nlohmann-json/copyright`。
+- zlib：zlib License；作为 libcurl 的依赖，安装包保留 `licenses/zlib/copyright`。
+
+上述许可证文件直接来自对应的 vcpkg 包。各项目的版权和许可证条款以安装包内副本为准。
 
 ## Windows SDK 与系统库
 

@@ -32,7 +32,7 @@
 
 1. 从最新默认分支创建短生命周期分支。
 2. 保持每个提交范围清晰，提交信息准确描述实际变化。
-3. 修改后运行对应架构的构建；涉及打包时同时运行 `-Package`。
+3. 修改后用对应架构的 CMake preset 构建；涉及打包时按构建文档中的命令行步骤生成安装包。
 4. 运行对应构建目录中的 CTest，并在 Pull Request 中记录结果。
 5. 创建 Pull Request，填写变更内容、测试环境、已知限制和用户可见影响。
 
@@ -50,17 +50,18 @@
 提交前至少执行：
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
-.\scripts\build.ps1 -Architecture x86 -Configuration Release
-ctest --test-dir out/build/x64-release --output-on-failure
-ctest --test-dir out/build/x86-release --output-on-failure
+cmake --preset x64-release
+cmake --build --preset x64-release --parallel
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+
+# 在 x86 Developer PowerShell 中执行
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
+cmake --preset x86-release
+cmake --build --preset x86-release --parallel
+ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 ```
 
-涉及安装包时再执行：
-
-```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package
-```
+涉及安装包时，按 [构建、测试和打包](docs/BUILD.md) 中的命令行步骤先生成 x86 运行组件，再生成 x64 安装包。
 
 测试真实目标应用时，请使用可以随时重启的测试程序，不要对系统关键进程、反作弊进程或生产环境进程进行实验。
 

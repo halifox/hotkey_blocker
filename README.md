@@ -40,6 +40,7 @@
 * 修改快捷键策略后需重启目标应用，已注册的快捷键不会被主动撤销；
 * 支持系统托盘运行和当前用户登录时启动，不安装 Windows 服务；
 * 使用原生 Win32/WTL 界面，显示应用图标、路径、策略和运行状态；
+* “关于”窗口显示构建版本，启动时后台检查 GitHub Release，也可从托盘菜单手动检查更新；
 * 配置保存为本地 UTF-8 INI 文件，并记录进程监控、注入和错误日志；
 * 所有规则和日志均保存在本地。
 
@@ -75,6 +76,8 @@
 4. 如果目标应用已经运行，请完全退出并重新启动它。
 5. 当状态显示“拦截已生效”后，该进程后续的标准全局快捷键注册会按当前策略处理。
 
+程序启动后会在后台检查 GitHub Release 的最新稳定版本；也可以在系统托盘菜单中打开“关于”查看当前版本，或选择“检查更新”。检查只请求公开的 Release 元数据，不会上传本地规则、配置或日志；程序不会静默下载或安装更新，只会在发现新版本时提供发布页面。
+
 ## 从源码构建
 
 ### 构建环境
@@ -84,52 +87,37 @@
 - MSVC x86/x64 编译工具、Windows SDK 和 ATL
 - CMake 3.25 或更高版本
 - Ninja
-- PowerShell 5.1 或更高版本
+- vcpkg（设置 `VCPKG_ROOT` 环境变量）
 
-### 构建
+### 命令行构建
 
-在仓库根目录执行：
-
-```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
-```
-
-常用构建命令：
+从 Visual Studio Developer PowerShell 的仓库根目录运行下面这条命令，即可从干净状态构建并打包完整的 x64 安装程序：
 
 ```powershell
-# x86 发布版
-.\scripts\build.ps1 -Architecture x86 -Configuration Release
-
-# x64 调试版
-.\scripts\build.ps1 -Architecture x64 -Configuration Debug
-
-# 构建 x64 安装包，同时准备 x86 运行组件
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x64.cmake
 ```
 
-也可以在已初始化的 Visual Studio Developer PowerShell 中使用 CMake Preset：
+把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录。该命令会构建 x86 Hook DLL 和注入辅助程序、x64 主程序和 Hook DLL，然后生成包含这些文件的 x64 NSIS 安装包及 SHA-256 文件。单架构日常构建仍可使用 `x86-release`、`x86-debug`、`x64-release` 和 `x64-debug` CMake presets。
 
-```powershell
-cmake --preset x64-release
-cmake --build --preset x64-release --parallel
-```
+完整步骤和依赖要求见 [构建、测试和打包](docs/BUILD.md)。
 
 构建测试：
 
 ```powershell
-ctest --test-dir out/build/x64-release --output-on-failure
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```
 
 主要产物：
 
 | 路径 | 内容 |
 | --- | --- |
-| `out/build/<preset>/` | CMake/Ninja 中间文件 |
+| `out/build/<preset>-vcpkg/` | CMake/Ninja 中间文件和 vcpkg 依赖 |
 | `out/bin/x64-release/` | x64 主程序和 Hook DLL |
 | `out/bin/x86-release/` | x86 主程序、Hook DLL 和注入辅助程序 |
 | `out/packages/` | NSIS 安装包及 SHA-256 校验文件 |
 
 完整的构建、测试、打包和 CI 说明见 [构建、测试和打包](docs/BUILD.md)。
+首次配置会通过 vcpkg 获取并静态构建 CPR 和 nlohmann/json 及其依赖。
 
 ## 运行
 
@@ -221,8 +209,9 @@ ctest --test-dir out/build/x64-release --output-on-failure
 欢迎提交 Issue 和 Pull Request。提交修改前请阅读 [贡献指南](CONTRIBUTING.md)，并至少完成一次目标架构的 Release 构建和测试：
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
-ctest --test-dir out/build/x64-release --output-on-failure
+cmake --preset x64-release
+cmake --build --preset x64-release --parallel
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```
 
 涉及 Hook、注入、权限或安全边界的修改，请同时更新 [用户指南](docs/USER_GUIDE.md)、[安全说明](SECURITY.md) 或 [构建说明](docs/BUILD.md) 中对应的行为描述。

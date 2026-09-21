@@ -12,18 +12,86 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  package:
-    name: Package x64 installer
+  resolve-version:
+    name: Resolve release version
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Validate version
+        id: version
+        shell: pwsh
+        env:
+          HKB_RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:HKB_RELEASE_VERSION
+          if (-not $version) {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Release version must use MAJOR.MINOR.PATCH, got: $version"
+          }
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+  build-x86:
+    name: Build x86 runtime components
+    needs: resolve-version
+    runs-on: windows-latest
+    env:
+      HKB_RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Configure and build x86 package components
+        shell: pwsh
+        run: |
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw 'The Windows runner did not provide VCPKG_INSTALLATION_ROOT.'
+          }
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset x86-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset x86-release --target hotkey_hook hotkey_blocker_injector32 --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload x86 runtime components
+        uses: actions/upload-artifact@v4
+        with:
+          name: hkb-x86-runtime
+          path: |
+            out/bin/x86-release/HotkeyHook32.dll
+            out/bin/x86-release/HotkeyBlockerInjector32.exe
+          if-no-files-found: error
+
+  package-x64:
+    name: Package x64 installer
+    needs: [resolve-version, build-x86]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      HKB_RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Download x86 runtime components
+        uses: actions/download-artifact@v4
+        with:
+          name: hkb-x86-runtime
+          path: out/bin/x86-release
 
       - name: Install NSIS
         shell: pwsh
@@ -43,19 +111,35 @@ jobs:
           $nsisDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & $nsis /VERSION
 
-      - name: Build installer
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure, build, and package x64 installer
         shell: pwsh
-        env:
-          HKB_RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          $version = $env:HKB_RELEASE_VERSION
-          if (-not $version) {
-            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw 'The Windows runner did not provide VCPKG_INSTALLATION_ROOT.'
           }
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Release version must use MAJOR.MINOR.PATCH, got: $version"
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset x64-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset x64-release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset x64-release --target package --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $buildDirectory = 'out/build/x64-release-vcpkg'
+          $packageName = "HotkeyBlocker-$env:HKB_RELEASE_VERSION-x64.exe"
+          $packageFile = Join-Path $buildDirectory $packageName
+          if (-not (Test-Path -LiteralPath $packageFile)) {
+            throw "CPack did not create the expected installer: $packageFile"
           }
-          .\scripts\build.ps1 -Architecture x64 -Configuration Release -Package -Version $version
+          New-Item -ItemType Directory -Path 'out/packages' -Force | Out-Null
+          Copy-Item -LiteralPath $packageFile -Destination 'out/packages' -Force
+          $hash = (Get-FileHash -LiteralPath (Join-Path 'out/packages' $packageName) -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $packageName" | Set-Content -LiteralPath (Join-Path 'out/packages' "$packageName.sha256") -Encoding ASCII
 
       - name: List package contents
         shell: pwsh

@@ -8,6 +8,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(cpr CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_path(DETOURS_INCLUDE_DIR NAMES detours/detours.h REQUIRED)
+find_library(DETOURS_LIBRARY NAMES detours REQUIRED)
+find_path(WTL_INCLUDE_DIR NAMES atlapp.h REQUIRED)
+
+add_library(Detours::Detours UNKNOWN IMPORTED GLOBAL)
+set_target_properties(Detours::Detours PROPERTIES
+        IMPORTED_LOCATION "${DETOURS_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${DETOURS_INCLUDE_DIR}"
+)
+
 set(HKB_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin" CACHE PATH
         "Directory for the runtime artifacts")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}")
@@ -23,10 +35,14 @@ function(hkb_configure_target target)
     target_compile_definitions("${target}" PRIVATE ${HKB_WINDOWS_DEFINITIONS})
     if (MSVC)
         target_compile_options("${target}" PRIVATE /utf-8)
-        # Ship self-contained binaries so a clean Windows installation does not
-        # need a separately installed VC++ redistributable just to load the hook.
+        if (VCPKG_TARGET_TRIPLET MATCHES "-static$")
+            # Static triplets keep the shipped binaries independent of the VC++ runtime.
+            set(_hkb_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        else ()
+            set(_hkb_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        endif ()
         set_property(TARGET "${target}" PROPERTY MSVC_RUNTIME_LIBRARY
-                "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+                "${_hkb_msvc_runtime}")
     endif ()
 endfunction()
 
@@ -36,13 +52,11 @@ configure_file(
         @ONLY
 )
 
-add_library(detours STATIC
-        third_party/detours/src/detours.cpp
-        third_party/detours/src/modules.cpp
-        third_party/detours/src/disasm.cpp
+configure_file(
+        "${CMAKE_SOURCE_DIR}/src/Version.h.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/Version.h"
+        @ONLY
 )
-target_include_directories(detours PUBLIC third_party/detours/src)
-hkb_configure_target(detours)
 
 add_executable(hkb WIN32
         src/ArchitectureDetector.cpp
@@ -56,12 +70,13 @@ add_executable(hkb WIN32
         src/RemoteInjector.cpp
         src/RuleManager.cpp
         src/StartupManager.cpp
+        src/UpdateChecker.cpp
         src/Win32Support.cpp
         src/main.cpp
         src/app.rc
         "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
 )
-target_include_directories(hkb PRIVATE third_party/wtl src)
+target_include_directories(hkb PRIVATE "${WTL_INCLUDE_DIR}" src "${CMAKE_CURRENT_BINARY_DIR}")
 hkb_configure_target(hkb)
 if (MSVC)
     target_link_options(hkb PRIVATE
@@ -71,6 +86,8 @@ endif ()
 target_link_libraries(hkb PRIVATE
         advapi32
         comctl32
+        cpr::cpr
+        nlohmann_json::nlohmann_json
         ole32
         shell32
         user32
@@ -83,7 +100,7 @@ add_library(hotkey_hook SHARED
 target_include_directories(hotkey_hook PRIVATE hook src)
 hkb_configure_target(hotkey_hook)
 target_sources(hotkey_hook PRIVATE src/HotkeyPolicyTransport.cpp)
-target_link_libraries(hotkey_hook PRIVATE detours user32)
+target_link_libraries(hotkey_hook PRIVATE Detours::Detours user32)
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(HKB_ARCH_LABEL x64)
@@ -191,10 +208,19 @@ install(FILES
         docs/USER_GUIDE.md
         DESTINATION docs
 )
-install(FILES
-        third_party/detours/LICENSE.md
-        DESTINATION licenses/detours
-)
+set(HKB_VCPKG_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share")
+install(FILES "${HKB_VCPKG_SHARE_DIR}/detours/copyright"
+        DESTINATION licenses/detours)
+install(FILES "${HKB_VCPKG_SHARE_DIR}/wtl/copyright"
+        DESTINATION licenses/wtl)
+install(FILES "${HKB_VCPKG_SHARE_DIR}/cpr/copyright"
+        DESTINATION licenses/cpr)
+install(FILES "${HKB_VCPKG_SHARE_DIR}/curl/copyright"
+        DESTINATION licenses/curl)
+install(FILES "${HKB_VCPKG_SHARE_DIR}/nlohmann-json/copyright"
+        DESTINATION licenses/nlohmann-json)
+install(FILES "${HKB_VCPKG_SHARE_DIR}/zlib/copyright"
+        DESTINATION licenses/zlib)
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     install(TARGETS hotkey_hook hotkey_blocker_injector32
