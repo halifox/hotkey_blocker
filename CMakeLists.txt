@@ -35,10 +35,14 @@ function(hkb_configure_target target)
     target_compile_definitions("${target}" PRIVATE ${HKB_WINDOWS_DEFINITIONS})
     if (MSVC)
         target_compile_options("${target}" PRIVATE /utf-8)
-        # Ship self-contained binaries so a clean Windows installation does not
-        # need a separately installed VC++ redistributable just to load the hook.
+        if (VCPKG_TARGET_TRIPLET MATCHES "-static$")
+            # Static triplets keep the shipped binaries independent of the VC++ runtime.
+            set(_hkb_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        else ()
+            set(_hkb_msvc_runtime "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        endif ()
         set_property(TARGET "${target}" PROPERTY MSVC_RUNTIME_LIBRARY
-                "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+                "${_hkb_msvc_runtime}")
     endif ()
 endfunction()
 
