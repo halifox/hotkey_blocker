@@ -54,6 +54,14 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
 constexpr UINT kUpdateCheckCompletedMessage = WM_APP + 3;
+constexpr int kRuleStateColumn = 1;
+constexpr int kRuntimeStatusColumn = 2;
+constexpr int kConfigureActionColumn = 3;
+constexpr int kDeleteActionColumn = 4;
+constexpr int kEnabledColumnWidth = 60;
+constexpr int kStatusColumnWidth = 190;
+constexpr int kConfigureColumnWidth = 74;
+constexpr int kDeleteColumnWidth = 74;
 UINT kTaskbarCreatedMessage = 0;
 
 const wchar_t* HotkeyModeText(HotkeyMode mode) {
@@ -265,7 +273,8 @@ class HotkeyPolicyDialog final : public ATL::CDialogImpl<HotkeyPolicyDialog> {
 public:
     enum { IDD = IDD_HOTKEY_POLICY_DIALOG };
 
-    explicit HotkeyPolicyDialog(HotkeyPolicy policy) : m_policy(std::move(policy)) {
+    HotkeyPolicyDialog(HotkeyPolicy policy, bool enabled)
+        : m_policy(std::move(policy)), m_enabled(enabled) {
         NormalizeHotkeyPolicy(m_policy);
         if (!IsValidHotkeyMode(m_policy.mode)) {
             m_policy.mode = HotkeyMode::BlockAll;
@@ -274,6 +283,10 @@ public:
 
     const HotkeyPolicy& Policy() const noexcept {
         return m_policy;
+    }
+
+    bool Enabled() const noexcept {
+        return m_enabled;
     }
 
     BEGIN_MSG_MAP(HotkeyPolicyDialog)
@@ -290,6 +303,7 @@ private:
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         m_capture.SubclassWindow(GetDlgItem(IDC_HOTKEY_CAPTURE));
+        ::CheckDlgButton(m_hWnd, IDC_RULE_ENABLED, m_enabled ? BST_CHECKED : BST_UNCHECKED);
 
         const HWND mode = GetDlgItem(IDC_HOTKEY_MODE);
         for (const HotkeyMode modeValue :
@@ -359,6 +373,7 @@ private:
                         MB_OK | MB_ICONERROR);
             return 0;
         }
+        m_enabled = ::IsDlgButtonChecked(m_hWnd, IDC_RULE_ENABLED) == BST_CHECKED;
         EndDialog(IDOK);
         return 0;
     }
@@ -391,6 +406,7 @@ private:
     }
 
     HotkeyPolicy m_policy;
+    bool m_enabled = true;
     HotkeyCapture m_capture;
 };
 
@@ -532,8 +548,10 @@ private:
             m_logger.Error(startupError);
             ShowError(L"读取开机启动设置失败", startupError);
         }
-        ::CheckDlgButton(m_hWnd, IDC_AUTOSTART,
-                         autoStartEnabled ? BST_CHECKED : BST_UNCHECKED);
+        if (HMENU menu = ::GetMenu(m_hWnd); menu != nullptr) {
+            ::CheckMenuItem(menu, ID_MAIN_AUTOSTART,
+                            MF_BYCOMMAND | (autoStartEnabled ? MF_CHECKED : MF_UNCHECKED));
+        }
 
         m_blockerService.SetStateChangedCallback([this] { QueueStateRefresh(); });
         if (!m_blockerService.Start(m_ruleManager.Rules())) {
@@ -656,22 +674,13 @@ private:
     LRESULT OnCommand(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
         handled = TRUE;
         switch (LOWORD(wParam)) {
-            case IDC_ADD_EXECUTABLE:
+            case ID_MAIN_ADD_EXECUTABLE:
                 AddExecutableApplication();
                 break;
-            case IDC_ADD_FOLDER:
+            case ID_MAIN_ADD_FOLDER:
                 AddFolderApplication();
                 break;
-            case IDC_CONFIGURE_HOTKEY:
-                ConfigureSelectedApplication();
-                break;
-            case IDC_DELETE_APP:
-                DeleteSelectedApplication();
-                break;
-            case IDC_TOGGLE_APP:
-                ToggleSelectedApplication();
-                break;
-            case IDC_AUTOSTART:
+            case ID_MAIN_AUTOSTART:
                 UpdateAutoStart();
                 break;
             case ID_TRAY_ABOUT:
@@ -696,6 +705,57 @@ private:
     LRESULT OnNotify(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
         const auto* header = reinterpret_cast<const NMHDR*>(lParam);
         if (header != nullptr && header->idFrom == IDC_APP_LIST &&
+            header->code == NM_CUSTOMDRAW) {
+            auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
+            const DWORD drawStage = customDraw->nmcd.dwDrawStage;
+            if (drawStage == CDDS_PREPAINT) {
+                handled = TRUE;
+                return CDRF_NOTIFYITEMDRAW;
+            }
+            if (drawStage == CDDS_ITEMPREPAINT) {
+                handled = TRUE;
+                return CDRF_NOTIFYSUBITEMDRAW;
+            }
+            if (drawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM) &&
+                (customDraw->iSubItem == kConfigureActionColumn ||
+                 customDraw->iSubItem == kDeleteActionColumn)) {
+                RECT buttonRect{};
+                const int rowIndex = static_cast<int>(customDraw->nmcd.dwItemSpec);
+                if (GetActionButtonRect(rowIndex, customDraw->iSubItem, buttonRect)) {
+                    const wchar_t* text = customDraw->iSubItem == kConfigureActionColumn
+                                              ? L"配置"
+                                              : L"删除";
+                    const int savedDc = ::SaveDC(customDraw->nmcd.hdc);
+                    ::DrawFrameControl(customDraw->nmcd.hdc, &buttonRect, DFC_BUTTON,
+                                       DFCS_BUTTONPUSH);
+                    ::SetBkMode(customDraw->nmcd.hdc, TRANSPARENT);
+                    ::DrawTextW(customDraw->nmcd.hdc, text, -1, &buttonRect,
+                                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    if (savedDc != 0) {
+                        ::RestoreDC(customDraw->nmcd.hdc, savedDc);
+                    }
+                }
+                handled = TRUE;
+                return CDRF_SKIPDEFAULT;
+            }
+            handled = TRUE;
+            return CDRF_DODEFAULT;
+        }
+        if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_CLICK) {
+            int rowIndex = -1;
+            int subItemIndex = -1;
+            if (GetActionHitAtCursor(rowIndex, subItemIndex)) {
+                const std::wstring path = m_renderedRows[static_cast<std::size_t>(rowIndex)].path;
+                if (subItemIndex == kConfigureActionColumn) {
+                    ConfigureApplication(path);
+                } else {
+                    DeleteApplication(path);
+                }
+                handled = TRUE;
+                return 0;
+            }
+        }
+        if (header != nullptr && header->idFrom == IDC_APP_LIST &&
             header->code == LVN_GETINFOTIPW) {
             const auto* infoTip = reinterpret_cast<const NMLVGETINFOTIPW*>(lParam);
             if (infoTip->iItem >= 0 &&
@@ -714,13 +774,74 @@ private:
             handled = TRUE;
             return 0;
         }
+        if (header != nullptr && header->idFrom == IDC_APP_LIST &&
+            header->code == LVN_KEYDOWN) {
+            const auto* keyDown = reinterpret_cast<const NMLVKEYDOWN*>(lParam);
+            const int selectedIndex = SelectedIndex();
+            if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedRows.size())) {
+                const std::wstring path =
+                    m_renderedRows[static_cast<std::size_t>(selectedIndex)].path;
+                if (keyDown->wVKey == VK_RETURN) {
+                    ConfigureApplication(path);
+                    handled = TRUE;
+                    return 0;
+                }
+                if (keyDown->wVKey == VK_DELETE) {
+                    DeleteApplication(path);
+                    handled = TRUE;
+                    return 0;
+                }
+            }
+        }
         if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
+            int rowIndex = -1;
+            int subItemIndex = -1;
+            if (GetActionHitAtCursor(rowIndex, subItemIndex)) {
+                handled = TRUE;
+                return 0;
+            }
             handled = TRUE;
             OpenSelectedLocation();
             return 0;
         }
         handled = FALSE;
         return 0;
+    }
+
+    bool GetActionButtonRect(int rowIndex, int subItemIndex, RECT& rect) const {
+        if (rowIndex < 0 || rowIndex >= static_cast<int>(m_renderedRows.size()) ||
+            (subItemIndex != kConfigureActionColumn && subItemIndex != kDeleteActionColumn) ||
+            !ListView_GetSubItemRect(m_listView, rowIndex, subItemIndex, LVIR_BOUNDS, &rect)) {
+            return false;
+        }
+        ::InflateRect(&rect, -4, -2);
+        return rect.right > rect.left && rect.bottom > rect.top;
+    }
+
+    bool GetActionHitAtCursor(int& rowIndex, int& subItemIndex) const {
+        if (m_listView == nullptr) {
+            return false;
+        }
+
+        POINT point{};
+        if (!::GetCursorPos(&point) || !::ScreenToClient(m_listView, &point)) {
+            return false;
+        }
+        LVHITTESTINFO hit{};
+        hit.pt = point;
+        const int hitRow = ListView_SubItemHitTest(m_listView, &hit);
+        if (hitRow < 0) {
+            return false;
+        }
+
+        RECT buttonRect{};
+        if (!GetActionButtonRect(hitRow, hit.iSubItem, buttonRect) ||
+            !::PtInRect(&buttonRect, point)) {
+            return false;
+        }
+        rowIndex = hitRow;
+        subItemIndex = hit.iSubItem;
+        return true;
     }
 
     LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
@@ -928,22 +1049,37 @@ private:
             m_systemImageList = reinterpret_cast<HIMAGELIST>(systemImageList);
             ListView_SetImageList(m_listView, m_systemImageList, LVSIL_SMALL);
         }
-        constexpr int kEnabledColumnWidth = 55;
-        constexpr int kStatusColumnWidth = 205;
         RECT listClientRect{};
         ::GetClientRect(m_listView, &listClientRect);
         const int listWidth = listClientRect.right - listClientRect.left;
-        const int remainingWidth = listWidth - kEnabledColumnWidth - kStatusColumnWidth;
+        const int remainingWidth = listWidth - kEnabledColumnWidth - kStatusColumnWidth -
+                                   kConfigureColumnWidth - kDeleteColumnWidth;
         const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
         InsertColumn(0, L"目标路径", pathColumnWidth, LVCFMT_LEFT);
-        InsertColumn(1, L"启用", kEnabledColumnWidth, LVCFMT_CENTER);
-        InsertColumn(2, L"拦截状态", kStatusColumnWidth, LVCFMT_CENTER);
+        InsertColumn(kRuleStateColumn, L"规则状态", kEnabledColumnWidth, LVCFMT_CENTER);
+        InsertColumn(kRuntimeStatusColumn, L"拦截状态", kStatusColumnWidth, LVCFMT_CENTER);
+        InsertColumn(kConfigureActionColumn, L"配置", kConfigureColumnWidth, LVCFMT_CENTER);
+        InsertColumn(kDeleteActionColumn, L"删除", kDeleteColumnWidth, LVCFMT_CENTER);
 
         const HWND header = ListView_GetHeader(m_listView);
         if (header != nullptr) {
             const LONG_PTR headerStyle = ::GetWindowLongPtrW(header, GWL_STYLE);
             ::SetWindowLongPtrW(header, GWL_STYLE, headerStyle | HDS_NOSIZING);
         }
+    }
+
+    void UpdatePathColumnWidth() const {
+        if (m_listView == nullptr) {
+            return;
+        }
+        RECT listClientRect{};
+        ::GetClientRect(m_listView, &listClientRect);
+        const int listWidth = listClientRect.right - listClientRect.left;
+        const int fixedWidth = kEnabledColumnWidth + kStatusColumnWidth +
+                               kConfigureColumnWidth + kDeleteColumnWidth;
+        const int remainingWidth = listWidth - fixedWidth;
+        const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
+        ListView_SetColumnWidth(m_listView, 0, pathColumnWidth);
     }
 
     bool LoadWindowIcons() {
@@ -1024,6 +1160,7 @@ private:
             }
         }
         m_renderedRows = rows;
+        UpdatePathColumnWidth();
     }
 
     std::vector<DisplayRow> BuildDisplayRows() const {
@@ -1085,9 +1222,11 @@ private:
         item.iImage = row.imageIndex;
         item.pszText = const_cast<LPWSTR>(row.path.c_str());
         SendMessageW(m_listView, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        const wchar_t* enabled = row.enabled ? L"是" : L"否";
-        SetListItemText(itemIndex, 1, const_cast<LPWSTR>(enabled));
-        SetListItemText(itemIndex, 2, const_cast<LPWSTR>(row.status.c_str()));
+        const wchar_t* enabled = row.enabled ? L"启用" : L"停用";
+        SetListItemText(itemIndex, kRuleStateColumn, const_cast<LPWSTR>(enabled));
+        SetListItemText(itemIndex, kRuntimeStatusColumn, const_cast<LPWSTR>(row.status.c_str()));
+        SetListItemText(itemIndex, kConfigureActionColumn, const_cast<LPWSTR>(L"配置"));
+        SetListItemText(itemIndex, kDeleteActionColumn, const_cast<LPWSTR>(L"删除"));
     }
 
     void SetListItemText(int itemIndex, int subItemIndex, LPWSTR text) const {
@@ -1226,21 +1365,14 @@ private:
         RefreshListView(true);
     }
 
-    void DeleteSelectedApplication() {
-        const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
-            ShowError(L"删除应用失败", L"请先选择一个应用");
-            return;
-        }
-
-        const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
-        const std::wstring message = L"确定删除规则？\n\n" + row.path;
+    void DeleteApplication(const std::wstring& path) {
+        const std::wstring message = L"确定删除规则？\n\n" + path;
         if (::MessageBoxW(m_hWnd, message.c_str(), L"删除应用",
                           MB_YESNO | MB_ICONQUESTION) != IDYES) {
             return;
         }
 
-        if (!m_ruleManager.Remove(row.path)) {
+        if (!m_ruleManager.Remove(path)) {
             ShowError(L"删除应用失败", m_ruleManager.LastError());
             return;
         }
@@ -1248,44 +1380,21 @@ private:
         RefreshListView(true);
     }
 
-    void ToggleSelectedApplication() {
-        const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
-            ShowError(L"修改应用状态失败", L"请先选择一个应用");
-            return;
-        }
-
-        const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(index)];
-        if (!m_ruleManager.SetEnabled(row.path, !row.enabled)) {
-            ShowError(L"修改应用状态失败", m_ruleManager.LastError());
-            return;
-        }
-        m_blockerService.UpdateRules(m_ruleManager.Rules());
-        RefreshListView(true);
-    }
-
-    void ConfigureSelectedApplication() {
-        const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
-            ShowError(L"配置快捷键策略失败", L"请先选择一个应用");
-            return;
-        }
-
-        const std::wstring path = m_renderedRows[static_cast<std::size_t>(index)].path;
+    void ConfigureApplication(const std::wstring& path) {
         const auto rule = std::find_if(
             m_ruleManager.Rules().begin(), m_ruleManager.Rules().end(),
             [&path](const AppRule& candidate) { return PathUtils::SamePath(candidate.path, path); });
         if (rule == m_ruleManager.Rules().end()) {
-            ShowError(L"配置快捷键策略失败", L"找不到所选应用规则");
+            ShowError(L"配置规则失败", L"找不到所选应用规则");
             return;
         }
 
-        HotkeyPolicyDialog dialog(rule->hotkeyPolicy);
+        HotkeyPolicyDialog dialog(rule->hotkeyPolicy, rule->enabled);
         if (dialog.DoModal(m_hWnd) != IDOK) {
             return;
         }
-        if (!m_ruleManager.SetHotkeyPolicy(path, dialog.Policy())) {
-            ShowError(L"配置快捷键策略失败", m_ruleManager.LastError());
+        if (!m_ruleManager.SetRuleSettings(path, dialog.Enabled(), dialog.Policy())) {
+            ShowError(L"保存规则配置失败", m_ruleManager.LastError());
             return;
         }
         m_blockerService.UpdateRules(m_ruleManager.Rules());
@@ -1308,13 +1417,23 @@ private:
     }
 
     void UpdateAutoStart() {
-        const bool enabled = ::IsDlgButtonChecked(m_hWnd, IDC_AUTOSTART) == BST_CHECKED;
+        HMENU menu = ::GetMenu(m_hWnd);
+        if (menu == nullptr) {
+            return;
+        }
+        const UINT state = ::GetMenuState(menu, ID_MAIN_AUTOSTART, MF_BYCOMMAND);
+        if (state == static_cast<UINT>(-1)) {
+            return;
+        }
+        const bool enabled = (state & MF_CHECKED) == 0;
         std::wstring error;
         if (!m_startupManager.SetEnabled(enabled, error)) {
-            ::CheckDlgButton(m_hWnd, IDC_AUTOSTART, enabled ? BST_UNCHECKED : BST_CHECKED);
             m_logger.Error(error);
             ShowError(L"设置开机启动失败", error);
+            return;
         }
+        ::CheckMenuItem(menu, ID_MAIN_AUTOSTART,
+                        MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
     }
 
     static bool IsActionableStatus(AppStatus status) {

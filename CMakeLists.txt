@@ -87,6 +87,7 @@ target_link_libraries(hkb PRIVATE
         advapi32
         comctl32
         cpr::cpr
+        gdi32
         nlohmann_json::nlohmann_json
         ole32
         shell32
