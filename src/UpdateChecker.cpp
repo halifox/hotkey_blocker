@@ -25,7 +25,6 @@ struct VersionNumber {
 
 UpdateCheckResult ErrorResult(std::wstring message) {
     UpdateCheckResult result;
-    result.currentVersion = hkb::version::kString;
     result.error = std::move(message);
     return result;
 }
@@ -112,7 +111,6 @@ UpdateChecker::~UpdateChecker() {
 bool UpdateChecker::Start(CompletionCallback callback) {
     Stop();
     m_stopRequested.store(false, std::memory_order_release);
-    m_running.store(true, std::memory_order_release);
 
     try {
         m_thread = std::thread([this, callback = std::move(callback)]() mutable {
@@ -120,10 +118,8 @@ bool UpdateChecker::Start(CompletionCallback callback) {
             if (!m_stopRequested.load(std::memory_order_acquire) && callback) {
                 callback(std::move(result));
             }
-            m_running.store(false, std::memory_order_release);
         });
     } catch (...) {
-        m_running.store(false, std::memory_order_release);
         return false;
     }
     return true;
@@ -134,11 +130,6 @@ void UpdateChecker::Stop() {
     if (m_thread.joinable()) {
         m_thread.join();
     }
-    m_running.store(false, std::memory_order_release);
-}
-
-bool UpdateChecker::IsRunning() const noexcept {
-    return m_running.load(std::memory_order_acquire);
 }
 
 UpdateCheckResult UpdateChecker::CheckLatestRelease() {
@@ -206,7 +197,6 @@ UpdateCheckResult UpdateChecker::CheckLatestRelease() {
     }
 
     UpdateCheckResult result;
-    result.success = true;
     result.currentVersion = hkb::version::kString;
     result.latestVersion = latestVersion;
     result.releaseUrl = latestUrl;

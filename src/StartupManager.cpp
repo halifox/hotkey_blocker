@@ -66,7 +66,7 @@ bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
             status = ERROR_SUCCESS;
         }
     } else {
-        std::wstring executablePath = ExecutablePath();
+        std::wstring executablePath = Win32Support::ModulePath();
         if (executablePath.empty()) {
             RegCloseKey(key);
             error = L"无法获取程序路径";
@@ -86,8 +86,4 @@ bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
         return false;
     }
     return true;
-}
-
-std::wstring StartupManager::ExecutablePath() {
-    return Win32Support::ModulePath();
 }

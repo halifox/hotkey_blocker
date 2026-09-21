@@ -459,6 +459,10 @@ private:
         ::SetWindowTextW(m_hWnd, title.c_str());
         m_listView = GetDlgItem(IDC_APP_LIST);
         InitializeListView();
+        if (m_listView != nullptr) {
+            ::SetWindowSubclass(m_listView, ListViewSubclassProc, 1,
+                                reinterpret_cast<DWORD_PTR>(this));
+        }
 
         if (!LoadWindowIcons()) {
             m_logger.Error(L"加载应用图标失败");
@@ -628,24 +632,34 @@ private:
             if (drawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM) &&
                 (customDraw->iSubItem == kConfigureActionColumn ||
                  customDraw->iSubItem == kDeleteActionColumn)) {
-                RECT buttonRect{};
+                RECT actionRect{};
                 const int rowIndex = static_cast<int>(customDraw->nmcd.dwItemSpec);
-                if (GetActionButtonRect(rowIndex, customDraw->iSubItem, buttonRect)) {
-                    const wchar_t* text = customDraw->iSubItem == kConfigureActionColumn
-                                              ? L"配置"
-                                              : L"删除";
-                    const int savedDc = ::SaveDC(customDraw->nmcd.hdc);
-                    ::DrawFrameControl(customDraw->nmcd.hdc, &buttonRect, DFC_BUTTON,
-                                       DFCS_BUTTONPUSH);
-                    ::SetBkMode(customDraw->nmcd.hdc, TRANSPARENT);
-                    ::DrawTextW(customDraw->nmcd.hdc, text, -1, &buttonRect,
-                                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-                    if (savedDc != 0) {
-                        ::RestoreDC(customDraw->nmcd.hdc, savedDc);
+                if (GetActionHitRect(rowIndex, customDraw->iSubItem, actionRect)) {
+                    const bool selected = (customDraw->nmcd.uItemState & CDIS_SELECTED) != 0;
+                    const bool focusedSelection = selected && ::GetFocus() == m_listView;
+                    const bool hovered = rowIndex == m_hoveredActionRow &&
+                                         customDraw->iSubItem == m_hoveredActionColumn;
+                    if (focusedSelection) {
+                        customDraw->clrText = ::GetSysColor(COLOR_HIGHLIGHTTEXT);
+                    } else if (customDraw->iSubItem == kConfigureActionColumn) {
+                        customDraw->clrText = ::GetSysColor(COLOR_HOTLIGHT);
+                    } else {
+                        HIGHCONTRASTW highContrast{};
+                        highContrast.cbSize = sizeof(highContrast);
+                        const bool highContrastEnabled =
+                            !::SystemParametersInfoW(SPI_GETHIGHCONTRAST,
+                                                     sizeof(highContrast), &highContrast, 0) ||
+                            (highContrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+                        customDraw->clrText = highContrastEnabled
+                                                  ? ::GetSysColor(COLOR_WINDOWTEXT)
+                                                  : RGB(180, 35, 24);
+                    }
+                    if (hovered && m_actionHoverFont != nullptr) {
+                        ::SelectObject(customDraw->nmcd.hdc, m_actionHoverFont);
                     }
                 }
                 handled = TRUE;
-                return CDRF_SKIPDEFAULT;
+                return CDRF_NEWFONT;
             }
             handled = TRUE;
             return CDRF_DODEFAULT;
@@ -663,6 +677,10 @@ private:
                 handled = TRUE;
                 return 0;
             }
+        }
+        if (header != nullptr && header->idFrom == IDC_APP_LIST &&
+            header->code == LVN_ITEMCHANGED) {
+            UpdateHoveredActionFromCursor(m_listView);
         }
         if (header != nullptr && header->idFrom == IDC_APP_LIST &&
             header->code == LVN_GETINFOTIPW) {
@@ -717,7 +735,7 @@ private:
         return 0;
     }
 
-    bool GetActionButtonRect(int rowIndex, int subItemIndex, RECT& rect) const {
+    bool GetActionHitRect(int rowIndex, int subItemIndex, RECT& rect) const {
         if (rowIndex < 0 || rowIndex >= static_cast<int>(m_renderedRows.size()) ||
             (subItemIndex != kConfigureActionColumn && subItemIndex != kDeleteActionColumn) ||
             !ListView_GetSubItemRect(m_listView, rowIndex, subItemIndex, LVIR_BOUNDS, &rect)) {
@@ -725,6 +743,28 @@ private:
         }
         ::InflateRect(&rect, -4, -2);
         return rect.right > rect.left && rect.bottom > rect.top;
+    }
+
+    bool GetActionHitAtPoint(POINT point, int& rowIndex, int& subItemIndex) const {
+        if (m_listView == nullptr) {
+            return false;
+        }
+
+        LVHITTESTINFO hit{};
+        hit.pt = point;
+        const int hitRow = ListView_SubItemHitTest(m_listView, &hit);
+        if (hitRow < 0) {
+            return false;
+        }
+
+        RECT actionRect{};
+        if (!GetActionHitRect(hitRow, hit.iSubItem, actionRect) ||
+            !::PtInRect(&actionRect, point)) {
+            return false;
+        }
+        rowIndex = hitRow;
+        subItemIndex = hit.iSubItem;
+        return true;
     }
 
     bool GetActionHitAtCursor(int& rowIndex, int& subItemIndex) const {
@@ -736,21 +776,109 @@ private:
         if (!::GetCursorPos(&point) || !::ScreenToClient(m_listView, &point)) {
             return false;
         }
-        LVHITTESTINFO hit{};
-        hit.pt = point;
-        const int hitRow = ListView_SubItemHitTest(m_listView, &hit);
-        if (hitRow < 0) {
-            return false;
+        return GetActionHitAtPoint(point, rowIndex, subItemIndex);
+    }
+
+    void InvalidateActionCell(int rowIndex, int subItemIndex) const {
+        RECT rect{};
+        if (GetActionHitRect(rowIndex, subItemIndex, rect)) {
+            ::InvalidateRect(m_listView, &rect, FALSE);
+        }
+    }
+
+    void SetHoveredAction(int rowIndex, int subItemIndex) {
+        if (rowIndex == m_hoveredActionRow && subItemIndex == m_hoveredActionColumn) {
+            return;
+        }
+        InvalidateActionCell(m_hoveredActionRow, m_hoveredActionColumn);
+        m_hoveredActionRow = rowIndex;
+        m_hoveredActionColumn = subItemIndex;
+        InvalidateActionCell(m_hoveredActionRow, m_hoveredActionColumn);
+    }
+
+    void UpdateHoveredActionFromCursor(HWND listView) {
+        POINT point{};
+        int rowIndex = -1;
+        int subItemIndex = -1;
+        if (::GetCursorPos(&point) && ::ScreenToClient(listView, &point) &&
+            GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
+            SetHoveredAction(rowIndex, subItemIndex);
+        } else {
+            SetHoveredAction(-1, -1);
+        }
+    }
+
+    void OnListViewMouseMove(HWND listView, LPARAM lParam) {
+        if (!m_trackingMouseLeave) {
+            TRACKMOUSEEVENT trackMouse{};
+            trackMouse.cbSize = sizeof(trackMouse);
+            trackMouse.dwFlags = TME_LEAVE;
+            trackMouse.hwndTrack = listView;
+            m_trackingMouseLeave = ::TrackMouseEvent(&trackMouse) != FALSE;
         }
 
-        RECT buttonRect{};
-        if (!GetActionButtonRect(hitRow, hit.iSubItem, buttonRect) ||
-            !::PtInRect(&buttonRect, point)) {
-            return false;
+        const POINT point{static_cast<SHORT>(LOWORD(lParam)),
+                          static_cast<SHORT>(HIWORD(lParam))};
+        int rowIndex = -1;
+        int subItemIndex = -1;
+        if (GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
+            SetHoveredAction(rowIndex, subItemIndex);
+        } else {
+            SetHoveredAction(-1, -1);
         }
-        rowIndex = hitRow;
-        subItemIndex = hit.iSubItem;
-        return true;
+    }
+
+    static LRESULT CALLBACK ListViewSubclassProc(HWND listView, UINT message, WPARAM wParam,
+                                                  LPARAM lParam, UINT_PTR subclassId,
+                                                  DWORD_PTR referenceData) {
+        auto* window = reinterpret_cast<MainWindow*>(referenceData);
+        if (window == nullptr) {
+            return ::DefSubclassProc(listView, message, wParam, lParam);
+        }
+
+        switch (message) {
+            case WM_MOUSEMOVE:
+                window->OnListViewMouseMove(listView, lParam);
+                break;
+            case WM_MOUSELEAVE:
+                window->m_trackingMouseLeave = false;
+                window->SetHoveredAction(-1, -1);
+                break;
+            case WM_SETCURSOR:
+                if (LOWORD(lParam) == HTCLIENT) {
+                    POINT point{};
+                    int rowIndex = -1;
+                    int subItemIndex = -1;
+                    if (::GetCursorPos(&point) && ::ScreenToClient(listView, &point) &&
+                        window->GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
+                        ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+                        return TRUE;
+                    }
+                }
+                break;
+            case WM_VSCROLL:
+            case WM_HSCROLL:
+            case WM_MOUSEWHEEL: {
+                const LRESULT result = ::DefSubclassProc(listView, message, wParam, lParam);
+                window->UpdateHoveredActionFromCursor(listView);
+                return result;
+            }
+            case WM_KEYDOWN:
+            case WM_KEYUP: {
+                const LRESULT result = ::DefSubclassProc(listView, message, wParam, lParam);
+                window->UpdateHoveredActionFromCursor(listView);
+                return result;
+            }
+            case WM_NCDESTROY:
+                window->m_trackingMouseLeave = false;
+                window->SetHoveredAction(-1, -1);
+                window->m_listView = nullptr;
+                ::RemoveWindowSubclass(listView, ListViewSubclassProc, subclassId);
+                break;
+            default:
+                break;
+        }
+        return ::DefSubclassProc(listView, message, wParam, lParam);
     }
 
     LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
@@ -775,6 +903,10 @@ private:
         RemoveTrayIcon();
         m_blockerService.Stop();
         DestroyWindowIcons();
+        if (m_actionHoverFont != nullptr) {
+            ::DeleteObject(m_actionHoverFont);
+            m_actionHoverFont = nullptr;
+        }
         m_logger.Info(L"程序退出");
         PostQuitMessage(0);
         return 0;
@@ -927,6 +1059,20 @@ private:
         if (m_listView == nullptr) {
             return;
         }
+        HFONT listFont = reinterpret_cast<HFONT>(
+            ::SendMessageW(m_listView, WM_GETFONT, 0, 0));
+        if (listFont == nullptr) {
+            listFont = reinterpret_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
+        }
+        LOGFONTW hoverFont{};
+        if (listFont != nullptr &&
+            ::GetObjectW(listFont, static_cast<int>(sizeof(hoverFont)), &hoverFont) ==
+                static_cast<int>(sizeof(hoverFont))) {
+            hoverFont.lfUnderline = TRUE;
+            m_actionHoverFont = ::CreateFontIndirectW(&hoverFont);
+        }
+        // Version 5 avoids clipping when the hover state selects an alternate font.
+        ::SendMessageW(m_listView, CCM_SETVERSION, 5, 0);
         ListView_SetExtendedListViewStyle(
             m_listView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER |
                             LVS_EX_LABELTIP | LVS_EX_INFOTIP);
@@ -1027,6 +1173,7 @@ private:
             selectedKey = m_renderedRows[static_cast<std::size_t>(selectedIndex)].path;
         }
 
+        SetHoveredAction(-1, -1);
         SendMessageW(m_listView, WM_SETREDRAW, FALSE, 0);
         ListView_DeleteAllItems(m_listView);
         for (std::size_t index = 0; index < rows.size(); ++index) {
@@ -1049,6 +1196,7 @@ private:
             }
         }
         m_renderedRows = rows;
+        UpdateHoveredActionFromCursor(m_listView);
         UpdatePathColumnWidth();
     }
 
@@ -1417,10 +1565,14 @@ private:
     bool m_startHidden = false;
     bool m_initializationFailed = false;
     bool m_trayIconAdded = false;
+    bool m_trackingMouseLeave = false;
     HWND m_listView = nullptr;
     HIMAGELIST m_systemImageList = nullptr;
+    HFONT m_actionHoverFont = nullptr;
     HICON m_largeIcon = nullptr;
     HICON m_smallIcon = nullptr;
+    int m_hoveredActionRow = -1;
+    int m_hoveredActionColumn = -1;
     UpdateChecker m_updateChecker;
     std::wstring m_pendingReleaseUrl;
     bool m_updateCheckRunning = false;

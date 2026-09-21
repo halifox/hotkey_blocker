@@ -122,7 +122,7 @@ if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     )
     target_include_directories(hotkey_blocker_injector32 PRIVATE src)
     hkb_configure_target(hotkey_blocker_injector32)
-    target_link_libraries(hotkey_blocker_injector32 PRIVATE user32)
+    target_link_libraries(hotkey_blocker_injector32 PRIVATE ole32 shell32 user32)
     set_target_properties(hotkey_blocker_injector32 PROPERTIES
             OUTPUT_NAME HotkeyBlockerInjector32)
 endif ()
@@ -161,7 +161,7 @@ if (HKB_BUILD_TESTS)
         )
         target_include_directories(hkb_injection_test PRIVATE src)
         hkb_configure_target(hkb_injection_test)
-        target_link_libraries(hkb_injection_test PRIVATE user32)
+        target_link_libraries(hkb_injection_test PRIVATE ole32 shell32 user32)
         add_dependencies(hkb_injection_test hotkey_hook hotkey_probe)
         set_target_properties(hkb_injection_test PROPERTIES
                 RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
@@ -183,6 +183,7 @@ if (HKB_BUILD_TESTS)
         target_include_directories(hkb_blocker_service_integration_test PRIVATE src)
         hkb_configure_target(hkb_blocker_service_integration_test)
         target_link_libraries(hkb_blocker_service_integration_test PRIVATE
+                ole32
                 shell32
                 user32
         )

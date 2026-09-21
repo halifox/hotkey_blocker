@@ -1,5 +1,7 @@
 #include "Win32Support.h"
 
+#include <shlobj.h>
+
 #include <iterator>
 #include <vector>
 
@@ -38,6 +40,28 @@ std::wstring ModulePath() {
         buffer.resize(buffer.size() * 2);
     }
     return {};
+}
+
+std::filesystem::path HotkeyBlockerDataDirectory() {
+    PWSTR localAppData = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr,
+                                       &localAppData)) &&
+        localAppData != nullptr) {
+        const std::filesystem::path result =
+            std::filesystem::path(localAppData) / L"HotkeyBlocker";
+        CoTaskMemFree(localAppData);
+        return result;
+    }
+    if (localAppData != nullptr) {
+        CoTaskMemFree(localAppData);
+    }
+
+    wchar_t buffer[MAX_PATH]{};
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        return std::filesystem::path(buffer) / L"HotkeyBlocker";
+    }
+    return std::filesystem::path(L"HotkeyBlocker");
 }
 
 }  // namespace Win32Support

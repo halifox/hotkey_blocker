@@ -10,7 +10,6 @@ struct UpdateCheckResult {
     std::wstring latestVersion;
     std::wstring releaseUrl;
     std::wstring error;
-    bool success = false;
     bool updateAvailable = false;
 };
 
@@ -26,12 +25,10 @@ public:
 
     bool Start(CompletionCallback callback);
     void Stop();
-    bool IsRunning() const noexcept;
 
 private:
     static UpdateCheckResult CheckLatestRelease();
 
     std::atomic_bool m_stopRequested = false;
-    std::atomic_bool m_running = false;
     std::thread m_thread;
 };

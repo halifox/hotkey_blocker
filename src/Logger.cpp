@@ -1,7 +1,8 @@
 #include "Logger.h"
 
+#include "Win32Support.h"
+
 #include <windows.h>
-#include <shlobj.h>
 
 #include <algorithm>
 #include <string>
@@ -23,10 +24,6 @@ void Logger::Info(std::wstring_view message) {
 
 void Logger::Error(std::wstring_view message) {
     Write(L"ERROR", message);
-}
-
-const std::filesystem::path& Logger::Path() const noexcept {
-    return m_path;
 }
 
 void Logger::Write(std::wstring_view level, std::wstring_view message) {
@@ -68,25 +65,7 @@ void Logger::Write(std::wstring_view level, std::wstring_view message) {
 }
 
 std::filesystem::path Logger::DefaultPath() {
-    PWSTR localAppData = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr,
-                                       &localAppData)) &&
-        localAppData != nullptr) {
-        const std::filesystem::path result =
-            std::filesystem::path(localAppData) / L"HotkeyBlocker" / L"logs" / L"hkb.log";
-        CoTaskMemFree(localAppData);
-        return result;
-    }
-    if (localAppData != nullptr) {
-        CoTaskMemFree(localAppData);
-    }
-
-    wchar_t buffer[MAX_PATH]{};
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, MAX_PATH);
-    if (length > 0 && length < MAX_PATH) {
-        return std::filesystem::path(buffer) / L"HotkeyBlocker" / L"logs" / L"hkb.log";
-    }
-    return std::filesystem::path(L"HotkeyBlocker") / L"logs" / L"hkb.log";
+    return Win32Support::HotkeyBlockerDataDirectory() / L"logs" / L"hkb.log";
 }
 
 std::string Logger::ToUtf8(std::wstring_view text) {

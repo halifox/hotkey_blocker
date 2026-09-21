@@ -1,8 +1,6 @@
 #include "HotkeyPolicyTransport.h"
 
-#include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -113,7 +111,6 @@ bool HotkeyPolicyRegistry::Start(std::wstring& error) {
     }
 
     auto* table = AsTable(view);
-    std::memset(table, 0, sizeof(*table));
     table->magic = kPolicyMagic;
     table->version = kPolicyVersion;
     table->entryCount = 0;
@@ -178,7 +175,6 @@ bool HotkeyPolicyRegistry::Publish(DWORD processId, const HotkeyPolicy& policy,
     entry->processId = processId;
     entry->mode = static_cast<std::uint32_t>(normalized.mode);
     entry->hotkeyCount = static_cast<std::uint32_t>(normalized.hotkeys.size());
-    std::memset(entry->hotkeys, 0, sizeof(entry->hotkeys));
     for (std::size_t index = 0; index < normalized.hotkeys.size(); ++index) {
         entry->hotkeys[index].modifiers = normalized.hotkeys[index].modifiers;
         entry->hotkeys[index].virtualKey = normalized.hotkeys[index].virtualKey;
@@ -199,7 +195,6 @@ void HotkeyPolicyRegistry::Remove(DWORD processId) {
         WirePolicyEntry& entry = table->entries[index];
         if (entry.valid != 0 && entry.processId == processId) {
             entry.valid = 0;
-            entry.hotkeyCount = 0;
             return;
         }
     }
@@ -237,9 +232,7 @@ bool LoadHotkeyPolicyForCurrentProcess(HotkeyPolicy& policy) {
                     {entry.hotkeys[hotkeyIndex].modifiers, entry.hotkeys[hotkeyIndex].virtualKey});
             }
             NormalizeHotkeyPolicy(loaded);
-            if (ValidateHotkeyPolicy(loaded)) {
-                found = true;
-            }
+            found = true;
             break;
         }
     }

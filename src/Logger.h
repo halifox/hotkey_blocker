@@ -12,7 +12,6 @@ public:
 
     void Info(std::wstring_view message);
     void Error(std::wstring_view message);
-    const std::filesystem::path& Path() const noexcept;
 
 private:
     void Write(std::wstring_view level, std::wstring_view message);

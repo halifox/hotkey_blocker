@@ -144,12 +144,12 @@ int wmain() {
     executableRule.path = modulePathBuffer;
     passed = Check(manager.AddRule(executableRule), L"添加规则并立即保存") && passed;
     passed = Check(!manager.AddRule(executableRule), L"拒绝重复规则") && passed;
-    passed = Check(manager.SetEnabled(modulePathBuffer, false), L"保存停用状态") && passed;
     HotkeyPolicy policy;
     policy.mode = HotkeyMode::Blacklist;
     policy.hotkeys = {
         {HotkeyPolicyConstants::kModifierControl | HotkeyPolicyConstants::kModifierAlt, 'A'}};
-    passed = Check(manager.SetHotkeyPolicy(modulePathBuffer, policy), L"保存快捷键策略") && passed;
+    passed = Check(manager.SetRuleSettings(modulePathBuffer, false, policy), L"保存规则设置") &&
+             passed;
 
     RuleManager reloaded{ConfigStore(managerConfigPath)};
     passed = Check(reloaded.Load(), L"重新加载规则") && passed;

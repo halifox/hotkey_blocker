@@ -36,8 +36,6 @@ public:
     ConfigStore();
     explicit ConfigStore(std::filesystem::path path);
 
-    const std::filesystem::path& Path() const noexcept;
-
     // A missing file is treated as an empty configuration.
     bool Load(AppConfig& config, std::wstring& error) const;
     bool Save(const AppConfig& config, std::wstring& error) const;

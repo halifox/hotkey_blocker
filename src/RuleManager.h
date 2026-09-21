@@ -16,8 +16,6 @@ public:
 
     bool AddRule(AppRule rule);
     bool Remove(const std::wstring& path);
-    bool SetEnabled(const std::wstring& path, bool enabled);
-    bool SetHotkeyPolicy(const std::wstring& path, HotkeyPolicy policy);
     bool SetRuleSettings(const std::wstring& path, bool enabled, HotkeyPolicy policy);
 
     const std::vector<AppRule>& Rules() const noexcept;

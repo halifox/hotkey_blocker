@@ -3,7 +3,6 @@
 #include "Win32Support.h"
 
 #include <windows.h>
-#include <shlobj.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -54,11 +53,6 @@ bool Utf8ToWide(const std::string& input, std::wstring& output, std::wstring& er
 
     if (input.find('\0') != std::string::npos) {
         error = L"配置文件包含无效的 NUL 字符";
-        return false;
-    }
-
-    if (input.size() > static_cast<std::size_t>(INT_MAX)) {
-        error = L"配置文件过大";
         return false;
     }
 
@@ -354,8 +348,7 @@ bool ReadFileBytes(const std::filesystem::path& path, std::string& bytes, std::w
     bytes.resize(static_cast<std::size_t>(size.QuadPart));
     std::size_t offset = 0;
     while (offset < bytes.size()) {
-        const DWORD request = static_cast<DWORD>(std::min<std::size_t>(
-            bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
+        const DWORD request = static_cast<DWORD>(bytes.size() - offset);
         DWORD read = 0;
         if (!ReadFile(file, bytes.data() + offset, request, &read, nullptr)) {
             systemError = GetLastError();
@@ -387,8 +380,7 @@ bool WriteFileBytes(const std::filesystem::path& path, const std::string& bytes,
 
     std::size_t offset = 0;
     while (offset < bytes.size()) {
-        const DWORD request = static_cast<DWORD>(std::min<std::size_t>(
-            bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
+        const DWORD request = static_cast<DWORD>(bytes.size() - offset);
         DWORD written = 0;
         if (!WriteFile(file, bytes.data() + offset, request, &written, nullptr)) {
             error = Win32Support::ErrorMessage(L"写入临时配置文件");
@@ -452,10 +444,6 @@ ConfigStore::ConfigStore() : m_path(DefaultPath()) {}
 
 ConfigStore::ConfigStore(std::filesystem::path path) : m_path(std::move(path)) {}
 
-const std::filesystem::path& ConfigStore::Path() const noexcept {
-    return m_path;
-}
-
 bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
     config = AppConfig{};
     error.clear();
@@ -463,8 +451,7 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
     std::string bytes;
     DWORD systemError = ERROR_SUCCESS;
     if (!ReadFileBytes(m_path, bytes, error, systemError)) {
-        const DWORD errorCode = systemError;
-        if (errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND) {
+        if (systemError == ERROR_FILE_NOT_FOUND || systemError == ERROR_PATH_NOT_FOUND) {
             error.clear();
             return true;
         }
@@ -595,10 +582,10 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         indexedRules.push_back({index, std::move(rule)});
     }
 
-    std::stable_sort(indexedRules.begin(), indexedRules.end(),
-                     [](const IndexedRule& left, const IndexedRule& right) {
-                         return left.index < right.index;
-                     });
+    std::sort(indexedRules.begin(), indexedRules.end(),
+              [](const IndexedRule& left, const IndexedRule& right) {
+                  return left.index < right.index;
+              });
     for (std::size_t index = 1; index < indexedRules.size(); ++index) {
         if (indexedRules[index - 1].index == indexedRules[index].index) {
             error = L"配置文件重复定义 App." + std::to_wstring(indexedRules[index].index);
@@ -667,25 +654,5 @@ bool ConfigStore::Save(const AppConfig& config, std::wstring& error) const {
 }
 
 std::filesystem::path ConfigStore::DefaultPath() {
-    PWSTR localAppData = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr,
-                                       &localAppData)) &&
-        localAppData != nullptr) {
-        const std::filesystem::path result =
-            std::filesystem::path(localAppData) / L"HotkeyBlocker" / L"config.ini";
-        CoTaskMemFree(localAppData);
-        return result;
-    }
-
-    if (localAppData != nullptr) {
-        CoTaskMemFree(localAppData);
-    }
-
-    wchar_t buffer[MAX_PATH]{};
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, MAX_PATH);
-    if (length > 0 && length < MAX_PATH) {
-        return std::filesystem::path(buffer) / L"HotkeyBlocker" / L"config.ini";
-    }
-
-    return std::filesystem::path(L"HotkeyBlocker") / L"config.ini";
+    return Win32Support::HotkeyBlockerDataDirectory() / L"config.ini";
 }
