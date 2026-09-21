@@ -88,35 +88,33 @@
 - CMake 3.25 或更高版本
 - Ninja
 - vcpkg（设置 `VCPKG_ROOT` 环境变量）
-- PowerShell 5.1 或更高版本
 
-### 构建
+### 命令行构建
 
-在仓库根目录执行：
+在与目标架构匹配的 Visual Studio Developer PowerShell 中，从仓库根目录执行。先设置本机 vcpkg 根目录：
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
+cmake --preset x64-release
+cmake --build --preset x64-release --parallel
 ```
+
+不指定 `--target` 会构建全部目标，包括 Hook DLL。
 
 常用构建命令：
 
 ```powershell
-# x86 发布版
-.\scripts\build.ps1 -Architecture x86 -Configuration Release
+# x86 发布版（在 x86 Developer PowerShell 中）
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
+cmake --preset x86-release
+cmake --build --preset x86-release --parallel
 
-# x64 调试版
-.\scripts\build.ps1 -Architecture x64 -Configuration Debug
-
-# 构建 x64 安装包，同时准备 x86 运行组件
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package
+# x64 调试版（在 x64 Developer PowerShell 中）
+cmake --preset x64-debug
+cmake --build --preset x64-debug --parallel
 ```
 
-也可以在已初始化的 Visual Studio Developer PowerShell 中使用 CMake Preset：
-
-```powershell
-cmake --preset x64-release
-cmake --build --preset x64-release --parallel
-```
+构建 x64 安装包时，先构建 x86 Release 运行组件，再构建 x64 Release；完整步骤见 [构建、测试和打包](docs/BUILD.md)。
 
 构建测试：
 
@@ -226,7 +224,8 @@ ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 欢迎提交 Issue 和 Pull Request。提交修改前请阅读 [贡献指南](CONTRIBUTING.md)，并至少完成一次目标架构的 Release 构建和测试：
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
+cmake --preset x64-release
+cmake --build --preset x64-release --parallel
 ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```
 

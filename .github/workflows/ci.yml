@@ -21,9 +21,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.architecture }}
+
+      - name: Configure and build
         shell: pwsh
-        run: .\scripts\build.ps1 -Architecture ${{ matrix.architecture }} -Configuration Release
+        run: |
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw 'The Windows runner did not provide VCPKG_INSTALLATION_ROOT.'
+          }
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          $preset = '${{ matrix.architecture }}-release'
+          cmake --preset $preset
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset $preset --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify runtime artifacts
         shell: pwsh

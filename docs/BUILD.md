@@ -15,33 +15,36 @@
 - CMake 3.25 或更高版本
 - Ninja
 - vcpkg
-- PowerShell 5.1 或更高版本
 
-构建脚本通过 `vswhere.exe` 查找 Visual Studio，并调用对应的 `VsDevCmd.bat` 初始化 MSVC 环境。手工执行 CMake 命令时，请先进入 Visual Studio Developer PowerShell，或执行相应的 `VsDevCmd.bat`。
-请将 vcpkg 根目录设置为 `VCPKG_ROOT`；GitHub Actions Windows Runner 提供的 `VCPKG_INSTALLATION_ROOT` 也会被构建脚本识别。首次配置会按 `vcpkg.json` 下载并构建 Detours、WTL、CPR、libcurl、nlohmann/json 及其依赖。依赖采用静态 triplet，与本项目的静态 MSVC 运行库一致。
+本地命令行构建前，先打开与目标架构匹配的 Visual Studio Developer PowerShell，并将 vcpkg 根目录设置为 `VCPKG_ROOT`。文中的打包和哈希示例使用 PowerShell。首次配置会按 `vcpkg.json` 下载并构建 Detours、WTL、CPR、libcurl、nlohmann/json 及其依赖。依赖采用静态 triplet，与本项目的静态 MSVC 运行库一致。
 
-## 推荐构建方式
+## 本地命令行构建
 
-在仓库根目录执行：
+在 x64 Developer PowerShell 的仓库根目录执行。将 vcpkg 路径替换为本机实际路径：
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
+cmake --preset x64-release
+cmake --build --preset x64-release --parallel
 ```
 
-常用参数：
+不指定 `--target` 时会构建全部目标，包括主程序和 `hotkey_hook`，因此 x64 输出目录中会同时生成 `HotkeyBlocker.exe` 和 `HotkeyHook64.dll`。
+
+Debug 使用 `x64-debug` preset：
 
 ```powershell
-# x86 Release
-.\scripts\build.ps1 -Architecture x86 -Configuration Release
-
-# x64 Debug
-.\scripts\build.ps1 -Architecture x64 -Configuration Debug
-
-# 删除本项目管理的 x64 Release 产物后重新构建
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Clean
+cmake --preset x64-debug
+cmake --build --preset x64-debug --parallel
 ```
 
-`-Clean` 只删除脚本管理的 `out/build/<preset>-vcpkg` 和 `out/bin/<preset>` 目录，不会操作源码目录或其他构建目录。
+需要重新配置并清理目标文件时：
+
+```powershell
+cmake --fresh --preset x64-release
+cmake --build --preset x64-release --clean-first --parallel
+```
+
+x86 构建需要在 x86 Developer PowerShell 中使用 `x86-release` 或 `x86-debug` preset，并在该 shell 中设置 `VCPKG_ROOT`。每个 preset 都有独立的构建目录。
 
 ## CMake Presets
 
@@ -54,17 +57,7 @@
 | `x86-release` | x86 Release |
 | `x86-debug` | x86 Debug |
 
-手工使用预设时，先初始化目标架构的 MSVC 环境：
-
-```powershell
-# 在 Developer PowerShell 或等价的 Visual Studio 环境中
-cmake --preset x64-release
-cmake --build --preset x64-release --parallel
-```
-
-手工使用 preset 前，还需在当前 shell 设置 vcpkg 路径，例如 `$env:VCPKG_ROOT = 'C:\vcpkg'`。
-
-x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDevCmd.bat -arch=x86 -host_arch=x64` 或 `-arch=x64 -host_arch=x64`，适合重复构建和 CI 环境。
+`CMakePresets.json` 中的 toolchain 使用当前 shell 的 `VCPKG_ROOT`。打开新的 Developer PowerShell 时，需要在该 shell 中再次设置它。x86 构建需要在 x86 MSVC 环境中执行，x64 构建需要在 x64 MSVC 环境中执行。
 
 ## 输出目录
 
@@ -92,25 +85,41 @@ ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 
 Windows 可能对从互联网下载的未签名程序显示未知发布者或 SmartScreen 警告，这是本项目发布策略的预期行为。不要要求用户关闭系统保护；发布页面应同时提供 SHA-256 校验文件，供用户核对下载文件的完整性。
 
-GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。使用 `-Package` 时，脚本会在 `out/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
+GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。Release 工作流会在 `out/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
 
-程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀并传入 `-Version`；该版本会同时写入程序“关于”窗口、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
+程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀，并将版本通过 `-DHKB_PROJECT_VERSION` 传给 x86 和 x64 配置；该版本会同时写入程序“关于”窗口、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
 
 ## 完整安装包
 
-x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。推荐使用：
+x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。下面以 `1.0.0` 为例；发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，传入去掉 `v` 的版本号。
+
+下面的命令都从仓库根目录执行；x86 和 x64 命令分别在对应架构的 Developer PowerShell 中运行。
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package
-```
+$version = '1.0.0'
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
 
-发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，可以显式传入版本，使 CMake、Windows 文件属性、安装包文件名和 Release 保持一致：
+# 在 x86 Developer PowerShell 中构建安装包需要的 32 位组件
+cmake --preset x86-release "-DHKB_PROJECT_VERSION=$version"
+cmake --build --preset x86-release --parallel
+```
 
 ```powershell
-.\scripts\build.ps1 -Architecture x64 -Configuration Release -Package -Version 1.0.0
+# 在 x64 Developer PowerShell 中，重新设置以下变量
+$version = '1.0.0'
+$env:VCPKG_ROOT = 'C:/dev/vcpkg'
+cmake --preset x64-release "-DHKB_PROJECT_VERSION=$version"
+cmake --build --preset x64-release --parallel
+cmake --build --preset x64-release --target package --parallel
+
+New-Item -ItemType Directory -Path out/packages -Force | Out-Null
+$packageName = "HotkeyBlocker-$version-x64.exe"
+Copy-Item "out/build/x64-release-vcpkg/$packageName" out/packages -Force
+$hash = (Get-FileHash "out/packages/$packageName" -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash  $packageName" | Set-Content "out/packages/$packageName.sha256" -Encoding ASCII
 ```
 
-脚本会按以下顺序工作：
+按以下顺序准备安装包：
 
 1. 构建 x86 Release 组件。
 2. 构建 x64 Release 主程序和 Hook。
@@ -138,7 +147,7 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 
 ## CI
 
-`.github/workflows/ci.yml` 会在 Windows runner 上分别构建 x86 和 x64 Release，并运行 CTest。`.github/workflows/release.yml` 会在推送 `v*` Tag 时构建 x64 安装包并生成 SHA-256 文件。
+`.github/workflows/ci.yml` 直接使用 CMake preset 命令在 Windows runner 上分别构建 x86 和 x64 Release，并运行 CTest。`.github/workflows/release.yml` 先构建 x86 运行组件，再构建 x64 安装包并生成 SHA-256 文件。工作流在 YAML 中初始化匹配架构的 MSVC 环境，然后直接调用 CMake。
 
 项目没有将 Visual Studio 编译器提交到仓库，因此不同 Visual Studio 版本不保证产生逐字节相同的二进制。若需要长期可复现的发布结果，应固定 GitHub runner、Visual Studio 工具链版本，并保存发布构建日志。
 
@@ -146,11 +155,11 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 
 ### 找不到 CMake 或 Ninja
 
-请使用 Visual Studio Developer PowerShell，或确认 CMake/Ninja 已加入 PATH。`build.ps1` 还要求系统能找到 `vswhere.exe`。
+请使用 Visual Studio Developer PowerShell，或确认 CMake、Ninja、匹配架构的 MSVC 工具链和有效的 `VCPKG_ROOT` 均已配置。
 
 ### x64 构建时找不到 32 位组件
 
-不要只手工构建 x64。使用 `-Package`，脚本会先构建 x86 组件并将其放入 x64 安装包。
+不要只构建 x64 后就生成安装包。先构建 `x86-release`，确保 `out/bin/x86-release/` 中的 Hook DLL 和注入辅助程序存在，再构建 x64 并运行 CPack。
 
 ### 注入失败
 
