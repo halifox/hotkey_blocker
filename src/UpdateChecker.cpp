@@ -16,7 +16,6 @@ namespace {
 
 constexpr char kGitHubReleaseUrl[] =
     "https://api.github.com/repos/halifox/hotkey_blocker/releases/latest";
-constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
 
 struct VersionNumber {
     std::uint32_t major = 0;
@@ -149,24 +148,16 @@ UpdateCheckResult UpdateChecker::CheckLatestRelease() {
     }
 
     std::string response;
-    bool responseTooLarge = false;
     const cpr::Response httpResponse = cpr::Get(
         cpr::Url{kGitHubReleaseUrl},
         cpr::Header{{"Accept", "application/vnd.github+json"},
                     {"User-Agent", "HotkeyBlocker"}},
         cpr::Timeout{5000}, cpr::ConnectTimeout{3000},
-        cpr::WriteCallback{[&response, &responseTooLarge](std::string_view chunk, intptr_t) {
-            if (chunk.size() > kMaxResponseBytes - response.size()) {
-                responseTooLarge = true;
-                return false;
-            }
+        cpr::WriteCallback{[&response](std::string_view chunk, intptr_t) {
             response.append(chunk.data(), chunk.size());
             return true;
         }});
 
-    if (responseTooLarge) {
-        return ErrorResult(L"版本检查响应过大");
-    }
     if (httpResponse.error.code != cpr::ErrorCode::OK) {
         std::wstring message = L"版本检查请求失败";
         const std::wstring detail = Utf8ToWide(httpResponse.error.message);
@@ -177,6 +168,16 @@ UpdateCheckResult UpdateChecker::CheckLatestRelease() {
         return ErrorResult(std::move(message));
     }
     if (httpResponse.status_code != 200) {
+        const nlohmann::json errorResponse = nlohmann::json::parse(response, nullptr, false);
+        if (errorResponse.is_object()) {
+            const auto messageIt = errorResponse.find("message");
+            if (messageIt != errorResponse.end() && messageIt->is_string()) {
+                const std::wstring message = Utf8ToWide(messageIt->get<std::string>());
+                if (!message.empty()) {
+                    return ErrorResult(message);
+                }
+            }
+        }
         return ErrorResult(L"GitHub 返回 HTTP " + std::to_wstring(httpResponse.status_code));
     }
 
