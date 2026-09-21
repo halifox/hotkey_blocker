@@ -701,29 +701,6 @@ private:
             handled = TRUE;
             return 0;
         }
-        if (header != nullptr && header->idFrom == IDC_APP_LIST &&
-            header->code == LVN_KEYDOWN) {
-            const auto* keyDown = reinterpret_cast<const NMLVKEYDOWN*>(lParam);
-            const int selectedIndex = SelectedIndex();
-            if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedRows.size())) {
-                const std::wstring path =
-                    m_renderedRows[static_cast<std::size_t>(selectedIndex)].path;
-                if (keyDown->wVKey == VK_RETURN) {
-                    ConfigureApplication(path);
-                    handled = TRUE;
-                    return 0;
-                }
-                if (keyDown->wVKey == VK_DELETE) {
-                    DeleteApplication(path);
-                    handled = TRUE;
-                    return 0;
-                }
-            }
-        }
-        if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
-            handled = TRUE;
-            return 0;
-        }
         handled = FALSE;
         return 0;
     }
@@ -1290,13 +1267,6 @@ private:
         }
         m_iconIndices.emplace(path, shellFileInfo.iIcon);
         return shellFileInfo.iIcon;
-    }
-
-    int SelectedIndex() const {
-        if (m_listView == nullptr) {
-            return -1;
-        }
-        return ListView_GetNextItem(m_listView, -1, LVNI_SELECTED);
     }
 
     bool PickApplicationPath(bool folder, std::wstring& path) {

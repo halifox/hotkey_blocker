@@ -32,7 +32,7 @@
 * 支持拦截全部、黑名单和白名单三种快捷键策略；
 * 支持 Ctrl、Alt、Shift、Win 组合键，每个策略最多保存 128 个快捷键；
 * 自动识别目标进程 x86 / x64 架构并加载对应 Hook 组件；
-* 实时监控目标进程，显示等待启动、拦截生效、需要重启、启用失败等状态；
+* 实时监控目标进程，显示等待启动、拦截生效、重启程序后生效、启用拦截失败等状态；
 * 修改快捷键策略后需重启目标应用，已注册的快捷键不会被主动撤销；
 * 支持系统托盘运行和当前用户登录时启动，不安装 Windows 服务；
 * 使用原生 Win32/WTL 界面，显示应用图标、路径、策略和运行状态；
@@ -62,7 +62,7 @@
 
 ### 从发布版本安装
 
-从 [GitHub Releases](https://github.com/halifox/hotkey_blocker/releases/latest) 下载安装包。x64 安装包包含主程序、x64 Hook，以及处理 32 位目标进程所需的 x86 Hook 和注入辅助程序。
+从 [GitHub Releases](https://github.com/halifox/hotkey_blocker/releases/latest) 下载安装包。目前发布的是 x64 安装包，需运行在 x64 Windows 上；安装包包含 x64 主程序和 Hook，以及处理 32 位目标进程所需的 x86 Hook 和注入辅助程序。
 
 安装并启动后：
 
