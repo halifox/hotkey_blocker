@@ -2,13 +2,15 @@
 
 #include <cstdint>
 #include <limits>
+#include <atomic>
 #include <utility>
 
 namespace {
 
 constexpr wchar_t kPolicyMappingName[] = L"Local\\HotkeyBlocker.HotkeyPolicies";
+constexpr wchar_t kPolicyMutexName[] = L"Local\\HotkeyBlocker.HotkeyPolicies.Lock";
 constexpr std::uint32_t kPolicyMagic = 0x484B4250u;
-constexpr std::uint32_t kPolicyVersion = 1u;
+constexpr std::uint32_t kPolicyVersion = 4u;
 constexpr std::size_t kMaxPolicyEntries = 256;
 
 #pragma pack(push, 1)
@@ -22,6 +24,7 @@ struct WirePolicyEntry {
     std::uint32_t mode = 0;
     std::uint32_t hotkeyCount = 0;
     std::uint32_t valid = 0;
+    std::uint64_t processCreationTime = 0;
     WireHotkeySpec hotkeys[HotkeyPolicyConstants::kMaxHotkeysPerPolicy]{};
 };
 
@@ -29,7 +32,9 @@ struct WirePolicyTable {
     std::uint32_t magic = 0;
     std::uint32_t version = 0;
     std::uint32_t entryCount = 0;
-    std::uint32_t reserved = 0;
+    std::uint32_t ownerProcessId = 0;
+    std::uint64_t ownerCreationTime = 0;
+    std::uint64_t ownerToken = 0;
     WirePolicyEntry entries[kMaxPolicyEntries]{};
 };
 #pragma pack(pop)
@@ -76,8 +81,101 @@ WirePolicyTable* AsTable(void* view) {
 
 bool IsTableValid(const WirePolicyTable& table) noexcept {
     return table.magic == kPolicyMagic && table.version == kPolicyVersion &&
-           table.entryCount <= kMaxPolicyEntries;
+           table.entryCount <= kMaxPolicyEntries && table.ownerProcessId != 0 &&
+           table.ownerCreationTime != 0 && table.ownerToken != 0;
 }
+
+bool IsOwnedBy(const WirePolicyTable& table, DWORD processId,
+               ULONGLONG creationTime, std::uint64_t ownerToken) noexcept {
+    return IsTableValid(table) && table.ownerProcessId == processId &&
+           table.ownerCreationTime == creationTime && table.ownerToken == ownerToken;
+}
+
+class ScopedPolicyTableLock final {
+public:
+    ScopedPolicyTableLock() {
+        m_mutex = CreateMutexW(nullptr, FALSE, kPolicyMutexName);
+        if (m_mutex == nullptr) {
+            return;
+        }
+        const DWORD waitResult = WaitForSingleObject(m_mutex, INFINITE);
+        m_acquired = waitResult == WAIT_OBJECT_0 || waitResult == WAIT_ABANDONED;
+    }
+
+    ~ScopedPolicyTableLock() {
+        if (m_acquired) {
+            ReleaseMutex(m_mutex);
+        }
+        if (m_mutex != nullptr) {
+            CloseHandle(m_mutex);
+        }
+    }
+
+    bool Acquired() const noexcept {
+        return m_acquired;
+    }
+
+private:
+    HANDLE m_mutex = nullptr;
+    bool m_acquired = false;
+};
+
+std::uint64_t NewOwnerToken() {
+    static std::atomic_uint64_t nextToken{1};
+    return nextToken.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool GetCreationTime(HANDLE process, ULONGLONG& creationTime) {
+    FILETIME creation{};
+    FILETIME exit{};
+    FILETIME kernel{};
+    FILETIME user{};
+    if (!GetProcessTimes(process, &creation, &exit, &kernel, &user)) {
+        return false;
+    }
+    ULARGE_INTEGER value{};
+    value.LowPart = creation.dwLowDateTime;
+    value.HighPart = creation.dwHighDateTime;
+    creationTime = value.QuadPart;
+    return creationTime != 0;
+}
+
+bool IsProcessInstanceAlive(const ProcessIdentity& identity) {
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
+                                 identity.pid);
+    if (process == nullptr) {
+        return GetLastError() == ERROR_ACCESS_DENIED;
+    }
+
+    ULONGLONG creationTime = 0;
+    const bool queried = GetCreationTime(process, creationTime);
+    const DWORD waitResult = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+    if (waitResult == WAIT_OBJECT_0) {
+        return false;
+    }
+    if (!queried) {
+        return true;
+    }
+    return creationTime == identity.creationTime;
+}
+
+struct RetainedMapping final {
+    HANDLE mapping = nullptr;
+    void* view = nullptr;
+
+    ~RetainedMapping() {
+        if (view != nullptr) {
+            UnmapViewOfFile(view);
+        }
+        if (mapping != nullptr) {
+            CloseHandle(mapping);
+        }
+    }
+};
+
+HANDLE g_readerMapping = nullptr;
+const WirePolicyTable* g_readerTable = nullptr;
 
 }  // namespace
 
@@ -90,6 +188,20 @@ bool HotkeyPolicyRegistry::Start(std::wstring& error) {
     if (m_mapping != nullptr && m_view != nullptr) {
         return true;
     }
+    ScopedPolicyTableLock tableLock;
+    if (!tableLock.Acquired()) {
+        error = ErrorText(L"锁定快捷键策略共享表失败");
+        return false;
+    }
+    if (m_ownerToken == 0) {
+        m_ownerToken = NewOwnerToken();
+    }
+
+    ULONGLONG ownerCreationTime = 0;
+    if (!GetCreationTime(GetCurrentProcess(), ownerCreationTime)) {
+        error = ErrorText(L"查询当前进程标识失败");
+        return false;
+    }
 
     HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
                                         MappingSize(), kPolicyMappingName);
@@ -97,12 +209,7 @@ bool HotkeyPolicyRegistry::Start(std::wstring& error) {
         error = ErrorText(L"创建快捷键策略共享内存失败");
         return false;
     }
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(mapping);
-        error = L"快捷键策略共享内存已经存在";
-        return false;
-    }
-
+    const DWORD creationError = GetLastError();
     void* view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, MappingSize());
     if (view == nullptr) {
         error = ErrorText(L"映射快捷键策略共享内存失败");
@@ -111,11 +218,45 @@ bool HotkeyPolicyRegistry::Start(std::wstring& error) {
     }
 
     auto* table = AsTable(view);
-    table->magic = kPolicyMagic;
-    table->version = kPolicyVersion;
-    table->entryCount = 0;
+    if (creationError == ERROR_ALREADY_EXISTS) {
+        if (!IsTableValid(*table)) {
+            UnmapViewOfFile(view);
+            CloseHandle(mapping);
+            error = L"快捷键策略共享内存已经被其他实例占用";
+            return false;
+        }
+        const ProcessIdentity owner{table->ownerProcessId, table->ownerCreationTime};
+        const DWORD currentPid = GetCurrentProcessId();
+        const bool sameOwner = owner.pid == currentPid &&
+                               owner.creationTime == ownerCreationTime &&
+                               table->ownerToken == m_ownerToken;
+        if (!sameOwner && IsProcessInstanceAlive(owner)) {
+            UnmapViewOfFile(view);
+            CloseHandle(mapping);
+            error = L"快捷键策略共享内存已经被其他实例占用";
+            return false;
+        }
+        table->ownerProcessId = currentPid;
+        table->ownerCreationTime = ownerCreationTime;
+        table->ownerToken = m_ownerToken;
+        for (std::size_t index = 0; index < table->entryCount; ++index) {
+            WirePolicyEntry& entry = table->entries[index];
+            if (entry.valid != 0 &&
+                !IsProcessInstanceAlive({entry.processId, entry.processCreationTime})) {
+                entry.valid = 0;
+            }
+        }
+    } else {
+        table->magic = kPolicyMagic;
+        table->version = kPolicyVersion;
+        table->entryCount = 0;
+        table->ownerProcessId = GetCurrentProcessId();
+        table->ownerCreationTime = ownerCreationTime;
+        table->ownerToken = m_ownerToken;
+    }
     m_mapping = mapping;
     m_view = view;
+    m_ownerCreationTime = ownerCreationTime;
     error.clear();
     return true;
 }
@@ -132,8 +273,14 @@ void HotkeyPolicyRegistry::Stop() {
     }
 }
 
-bool HotkeyPolicyRegistry::Publish(DWORD processId, const HotkeyPolicy& policy,
+bool HotkeyPolicyRegistry::Publish(const ProcessIdentity& process,
+                                   const HotkeyPolicy& policy,
                                    std::wstring& error) {
+    if (process.pid == 0 || process.creationTime == 0) {
+        error = L"目标进程标识无效";
+        return false;
+    }
+
     HotkeyPolicy normalized = policy;
     NormalizeHotkeyPolicy(normalized);
     if (!ValidateHotkeyPolicy(normalized)) {
@@ -146,11 +293,21 @@ bool HotkeyPolicyRegistry::Publish(DWORD processId, const HotkeyPolicy& policy,
         error = L"快捷键策略共享内存尚未启动";
         return false;
     }
+    ScopedPolicyTableLock tableLock;
+    if (!tableLock.Acquired()) {
+        error = ErrorText(L"锁定快捷键策略共享表失败");
+        return false;
+    }
 
     auto* table = AsTable(m_view);
+    if (!IsOwnedBy(*table, GetCurrentProcessId(), m_ownerCreationTime, m_ownerToken)) {
+        error = L"快捷键策略共享表所有权已变化";
+        return false;
+    }
     WirePolicyEntry* entry = nullptr;
     for (std::size_t index = 0; index < table->entryCount; ++index) {
-        if (table->entries[index].valid != 0 && table->entries[index].processId == processId) {
+        if (table->entries[index].valid != 0 &&
+            table->entries[index].processId == process.pid) {
             entry = &table->entries[index];
             break;
         }
@@ -172,7 +329,8 @@ bool HotkeyPolicyRegistry::Publish(DWORD processId, const HotkeyPolicy& policy,
     }
 
     entry->valid = 0;
-    entry->processId = processId;
+    entry->processId = process.pid;
+    entry->processCreationTime = process.creationTime;
     entry->mode = static_cast<std::uint32_t>(normalized.mode);
     entry->hotkeyCount = static_cast<std::uint32_t>(normalized.hotkeys.size());
     for (std::size_t index = 0; index < normalized.hotkeys.size(); ++index) {
@@ -184,42 +342,113 @@ bool HotkeyPolicyRegistry::Publish(DWORD processId, const HotkeyPolicy& policy,
     return true;
 }
 
-void HotkeyPolicyRegistry::Remove(DWORD processId) {
+void HotkeyPolicyRegistry::Remove(const ProcessIdentity& process) {
     std::lock_guard lock(m_mutex);
     if (m_view == nullptr) {
         return;
     }
+    ScopedPolicyTableLock tableLock;
+    if (!tableLock.Acquired()) {
+        return;
+    }
 
     auto* table = AsTable(m_view);
+    if (!IsOwnedBy(*table, GetCurrentProcessId(), m_ownerCreationTime, m_ownerToken)) {
+        return;
+    }
     for (std::size_t index = 0; index < table->entryCount; ++index) {
         WirePolicyEntry& entry = table->entries[index];
-        if (entry.valid != 0 && entry.processId == processId) {
+        if (entry.valid != 0 && entry.processId == process.pid &&
+            entry.processCreationTime == process.creationTime) {
             entry.valid = 0;
             return;
         }
     }
 }
 
-bool LoadHotkeyPolicyForCurrentProcess(HotkeyPolicy& policy) {
+std::shared_ptr<void> HotkeyPolicyRegistry::RetainMappingLifetime(std::wstring& error) const {
+    std::lock_guard lock(m_mutex);
+    if (m_mapping == nullptr || m_view == nullptr) {
+        error = L"快捷键策略共享内存尚未启动";
+        return {};
+    }
+
+    HANDLE mapping = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), m_mapping, GetCurrentProcess(), &mapping, 0,
+                         FALSE, DUPLICATE_SAME_ACCESS)) {
+        error = ErrorText(L"保留快捷键策略共享内存句柄失败");
+        return {};
+    }
+    void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, MappingSize());
+    if (view == nullptr) {
+        error = ErrorText(L"保留快捷键策略共享内存视图失败");
+        CloseHandle(mapping);
+        return {};
+    }
+
+    try {
+        auto retained = std::make_shared<RetainedMapping>();
+        retained->mapping = mapping;
+        retained->view = view;
+        error.clear();
+        return retained;
+    } catch (...) {
+        UnmapViewOfFile(view);
+        CloseHandle(mapping);
+        error = L"无法保留快捷键策略共享内存生命周期";
+        return {};
+    }
+}
+
+bool RetainHotkeyPolicyMappingForCurrentProcess() {
+    if (g_readerMapping != nullptr && g_readerTable != nullptr) {
+        return true;
+    }
+
     HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, kPolicyMappingName);
     if (mapping == nullptr) {
         return false;
     }
-
     const void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, MappingSize());
     if (view == nullptr) {
         CloseHandle(mapping);
         return false;
     }
 
-    const auto* table = AsTable(view);
+    g_readerMapping = mapping;
+    g_readerTable = AsTable(view);
+    return true;
+}
+
+void ReleaseHotkeyPolicyMappingForCurrentProcess() {
+    if (g_readerTable != nullptr) {
+        UnmapViewOfFile(g_readerTable);
+        g_readerTable = nullptr;
+    }
+    if (g_readerMapping != nullptr) {
+        CloseHandle(g_readerMapping);
+        g_readerMapping = nullptr;
+    }
+}
+
+bool LoadHotkeyPolicyForCurrentProcess(HotkeyPolicy& policy) {
+    if (!RetainHotkeyPolicyMappingForCurrentProcess()) {
+        return false;
+    }
+
+    const auto* table = g_readerTable;
     bool found = false;
     HotkeyPolicy loaded;
     const DWORD processId = GetCurrentProcessId();
+    ULONGLONG processCreationTime = 0;
+    if (!GetCreationTime(GetCurrentProcess(), processCreationTime)) {
+        return false;
+    }
     if (IsTableValid(*table)) {
         for (std::size_t index = 0; index < table->entryCount; ++index) {
             const WirePolicyEntry& entry = table->entries[index];
             if (entry.valid == 0 || entry.processId != processId ||
+                entry.processCreationTime != processCreationTime ||
                 entry.hotkeyCount > HotkeyPolicyConstants::kMaxHotkeysPerPolicy ||
                 !IsValidHotkeyMode(static_cast<HotkeyMode>(entry.mode))) {
                 continue;
@@ -237,8 +466,6 @@ bool LoadHotkeyPolicyForCurrentProcess(HotkeyPolicy& policy) {
         }
     }
 
-    UnmapViewOfFile(view);
-    CloseHandle(mapping);
     if (found) {
         policy = std::move(loaded);
     }

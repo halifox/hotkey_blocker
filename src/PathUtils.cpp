@@ -97,6 +97,22 @@ std::wstring FinalPathIfAvailable(const std::wstring& path) {
     return result;
 }
 
+bool IsNormalizedPathUnderDirectory(const std::wstring& path,
+                                    const std::wstring& directory) {
+    if (path.empty() || directory.empty()) {
+        return false;
+    }
+
+    std::wstring directoryPrefix = directory;
+    if (directoryPrefix.back() != L'\\') {
+        directoryPrefix.push_back(L'\\');
+    }
+    return path.size() > directoryPrefix.size() &&
+           CompareStringOrdinal(path.c_str(), static_cast<int>(directoryPrefix.size()),
+                                directoryPrefix.c_str(),
+                                static_cast<int>(directoryPrefix.size()), TRUE) == CSTR_EQUAL;
+}
+
 }  // namespace
 
 std::wstring NormalizePath(const std::wstring& path) {
@@ -126,24 +142,6 @@ bool SamePath(const std::wstring& left, const std::wstring& right) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-bool IsPathUnderDirectory(const std::wstring& path, const std::wstring& directory) {
-    const std::wstring normalizedPath = NormalizePath(path);
-    std::wstring normalizedDirectory = NormalizePath(directory);
-    if (normalizedPath.empty() || normalizedDirectory.empty()) {
-        return false;
-    }
-
-    if (normalizedDirectory.back() != L'\\') {
-        normalizedDirectory.push_back(L'\\');
-    }
-    return normalizedPath.size() > normalizedDirectory.size() &&
-           CompareStringOrdinal(normalizedPath.c_str(),
-                                static_cast<int>(normalizedDirectory.size()),
-                                normalizedDirectory.c_str(),
-                                static_cast<int>(normalizedDirectory.size()), TRUE) ==
-               CSTR_EQUAL;
-}
-
 bool NormalizeRule(AppRule& rule, std::wstring& error) {
     error.clear();
     rule.path = NormalizePath(rule.path);
@@ -153,22 +151,28 @@ bool NormalizeRule(AppRule& rule, std::wstring& error) {
     }
 
     const DWORD attributes = GetFileAttributesW(rule.path.c_str());
-    if (rule.kind == RuleKind::Executable) {
-        if (!IsExePath(rule.path)) {
-            error = L"规则路径必须是 .exe 文件";
+    switch (rule.kind) {
+        case RuleKind::Executable:
+            if (!IsExePath(rule.path)) {
+                error = L"规则路径必须是 .exe 文件";
+                return false;
+            }
+            if (attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                error = L"规则路径不能是文件夹";
+                return false;
+            }
+            break;
+        case RuleKind::Directory:
+            if (attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+                error = L"文件夹规则路径必须是文件夹";
+                return false;
+            }
+            break;
+        default:
+            error = L"规则类型无效";
             return false;
-        }
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-            error = L"规则路径不能是文件夹";
-            return false;
-        }
-    } else {
-        if (attributes != INVALID_FILE_ATTRIBUTES &&
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            error = L"文件夹规则路径必须是文件夹";
-            return false;
-        }
     }
 
     if (rule.displayName.empty()) {
@@ -180,11 +184,53 @@ bool NormalizeRule(AppRule& rule, std::wstring& error) {
     return true;
 }
 
+namespace {
+
+bool BuildValidatedRules(const std::vector<AppRule>& rules,
+                         std::vector<AppRule>& normalizedRules, std::wstring& error) {
+    error.clear();
+    normalizedRules.clear();
+    normalizedRules.reserve(rules.size());
+    for (const AppRule& sourceRule : rules) {
+        AppRule rule = sourceRule;
+        if (!NormalizeRule(rule, error)) {
+            return false;
+        }
+        const auto overlapping = std::find_if(
+            normalizedRules.begin(), normalizedRules.end(),
+            [&rule](const AppRule& existing) {
+                return Overlaps(existing, rule);
+            });
+        if (overlapping != normalizedRules.end()) {
+            error = L"配置包含重叠规则：" + rule.path;
+            return false;
+        }
+        normalizedRules.push_back(std::move(rule));
+    }
+    return true;
+}
+
+}  // namespace
+
+bool NormalizeAndValidateRules(std::vector<AppRule>& rules, std::wstring& error) {
+    std::vector<AppRule> normalizedRules;
+    if (!BuildValidatedRules(rules, normalizedRules, error)) {
+        return false;
+    }
+    rules = std::move(normalizedRules);
+    return true;
+}
+
+bool ValidateRules(const std::vector<AppRule>& rules, std::wstring& error) {
+    std::vector<AppRule> normalizedRules;
+    return BuildValidatedRules(rules, normalizedRules, error);
+}
+
 bool Matches(const AppRule& rule, const std::wstring& path) {
     if (rule.kind == RuleKind::Executable) {
         return SamePath(rule.path, path);
     }
-    return IsExePath(path) && IsPathUnderDirectory(path, rule.path);
+    return IsExePath(path) && IsNormalizedPathUnderDirectory(path, rule.path);
 }
 
 bool Overlaps(const AppRule& left, const AppRule& right) {
@@ -195,8 +241,8 @@ bool Overlaps(const AppRule& left, const AppRule& right) {
         return Matches(left, right.path);
     }
     return SamePath(left.path, right.path) ||
-           IsPathUnderDirectory(left.path, right.path) ||
-           IsPathUnderDirectory(right.path, left.path);
+           IsNormalizedPathUnderDirectory(left.path, right.path) ||
+           IsNormalizedPathUnderDirectory(right.path, left.path);
 }
 
 }  // namespace PathUtils

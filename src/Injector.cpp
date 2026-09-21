@@ -6,11 +6,65 @@
 #include <windows.h>
 
 #include <filesystem>
+#include <memory>
 #include <utility>
 
 namespace {
 
 constexpr DWORD kHelperTimeoutMs = 15000;
+
+class HelperProcessOperation final : public InjectionOperation {
+public:
+    void Attach(HANDLE process) noexcept {
+        m_process = process;
+    }
+    ~HelperProcessOperation() override {
+        if (m_process != nullptr) {
+            CloseHandle(m_process);
+        }
+    }
+
+    bool TryComplete(InjectionCompletion& completion) override {
+        if (m_process == nullptr) {
+            completion.status = InjectionStatus::Failed;
+            completion.error = L"32 位注入辅助进程句柄无效";
+            return true;
+        }
+
+        const DWORD waitResult = WaitForSingleObject(m_process, 0);
+        if (waitResult == WAIT_TIMEOUT) {
+            return false;
+        }
+        if (waitResult == WAIT_FAILED) {
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
+            return false;
+        }
+        if (waitResult != WAIT_OBJECT_0) {
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = L"等待 32 位注入辅助程序返回未知状态";
+            return false;
+        }
+
+        DWORD exitCode = 1;
+        if (!GetExitCodeProcess(m_process, &exitCode)) {
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = Win32Support::ErrorMessage(L"获取 32 位注入结果失败");
+        } else if (exitCode == static_cast<DWORD>(InjectorHelperExitCode::Succeeded)) {
+            completion.status = InjectionStatus::Succeeded;
+        } else {
+            completion.status = InjectionStatus::Failed;
+            completion.error = L"32 位注入辅助程序失败（退出码 " +
+                               std::to_wstring(exitCode) + L"）";
+        }
+        CloseHandle(m_process);
+        m_process = nullptr;
+        return true;
+    }
+
+private:
+    HANDLE m_process = nullptr;
+};
 
 std::filesystem::path Find32BitHelper(const std::filesystem::path& directory) {
     const std::filesystem::path path = directory / L"win32" / L"HotkeyBlockerInjector32.exe";
@@ -72,8 +126,9 @@ InjectionResult Injector::Inject(DWORD pid) const {
 
     const RemoteInjectionResult remoteResult =
         InjectDllIntoProcess(pid, dllPath.wstring());
-    result.success = remoteResult.success;
+    result.status = remoteResult.status;
     result.error = remoteResult.error;
+    result.pendingOperation = remoteResult.pendingOperation;
     return result;
 }
 
@@ -92,6 +147,14 @@ InjectionResult Injector::InjectWith32BitHelper(
         return result;
     }
 
+    std::shared_ptr<HelperProcessOperation> operation;
+    try {
+        operation = std::make_shared<HelperProcessOperation>();
+    } catch (...) {
+        result.error = L"无法保留 32 位注入操作状态";
+        return result;
+    }
+
     std::wstring commandLine = QuoteCommandLineArgument(helper.wstring());
     commandLine += L" " + std::to_wstring(pid);
     commandLine += L" " + QuoteCommandLineArgument(dllPath.wstring());
@@ -106,24 +169,27 @@ InjectionResult Injector::InjectWith32BitHelper(
         return result;
     }
 
+    operation->Attach(processInfo.hProcess);
+    CloseHandle(processInfo.hThread);
     const DWORD waitResult = WaitForSingleObject(processInfo.hProcess, kHelperTimeoutMs);
-    if (waitResult == WAIT_TIMEOUT) {
-        result.error = L"等待 32 位注入辅助程序超时";
-    } else if (waitResult != WAIT_OBJECT_0) {
-        result.error = Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
-    } else {
-        DWORD exitCode = 1;
-        if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
-            result.error = Win32Support::ErrorMessage(L"获取 32 位注入结果失败");
-        } else if (exitCode == 0) {
-            result.success = true;
+    if (waitResult == WAIT_OBJECT_0) {
+        InjectionCompletion completion;
+        if (operation->TryComplete(completion)) {
+            result.status = completion.status;
+            result.error = std::move(completion.error);
         } else {
-            result.error = L"32 位注入辅助程序失败（退出码 " + std::to_wstring(exitCode) + L"）";
+            result.status = InjectionStatus::Pending;
+            result.error = std::move(completion.error);
+            result.pendingOperation = std::move(operation);
         }
+    } else {
+        result.status = InjectionStatus::Pending;
+        result.error = waitResult == WAIT_TIMEOUT
+                           ? L"等待 32 位注入辅助程序超时"
+                           : Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
+        result.pendingOperation = std::move(operation);
     }
 
-    CloseHandle(processInfo.hThread);
-    CloseHandle(processInfo.hProcess);
     return result;
 }
 

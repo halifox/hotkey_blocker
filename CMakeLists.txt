@@ -63,6 +63,7 @@ add_executable(hkb WIN32
         src/BlockerService.cpp
         src/ConfigStore.cpp
         src/Injector.cpp
+        src/InjectionOperationReaper.cpp
         src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
         src/PathUtils.cpp
@@ -173,6 +174,7 @@ if (HKB_BUILD_TESTS)
                 src/ArchitectureDetector.cpp
                 src/BlockerService.cpp
                 src/Injector.cpp
+                src/InjectionOperationReaper.cpp
                 src/HotkeyPolicyTransport.cpp
                 src/Logger.cpp
                 src/PathUtils.cpp

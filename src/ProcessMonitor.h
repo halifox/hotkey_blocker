@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ProcessIdentity.h"
+
 #include <windows.h>
 
 #include <functional>
@@ -9,10 +11,33 @@
 #include <unordered_map>
 #include <vector>
 
+bool SameProcessInstance(const ProcessIdentity& left, const ProcessIdentity& right) noexcept;
+
 struct ProcessInfo {
-    DWORD pid = 0;
+    ProcessIdentity identity;
     std::wstring imagePath;
-    ULONGLONG creationTime = 0;
+};
+
+struct ProcessQueryFailure {
+    DWORD pid = 0;
+    DWORD error = ERROR_SUCCESS;
+};
+
+enum class ProcessScanStatus {
+    NotStarted,
+    Complete,
+    Partial,
+    Failed,
+};
+
+struct ProcessScanResult {
+    // `error` is set when the process table could not be read as a whole.
+    // Per-process query failures are reported separately below.
+    ProcessScanStatus status = ProcessScanStatus::NotStarted;
+    DWORD error = ERROR_SUCCESS;
+    // Only process identities queried successfully during this scan.
+    std::vector<ProcessInfo> processes;
+    std::vector<ProcessQueryFailure> queryFailures;
 };
 
 enum class ProcessEventType {
@@ -29,6 +54,8 @@ struct ProcessEvent {
 class ProcessMonitor final {
 public:
     using Callback = std::function<void(const ProcessEvent&)>;
+    // Runs after the scan's process events; the flag reports changes to scan health.
+    using ScanCallback = std::function<void(const ProcessScanResult&, bool)>;
 
     ProcessMonitor();
     ~ProcessMonitor();
@@ -36,9 +63,8 @@ public:
     ProcessMonitor(const ProcessMonitor&) = delete;
     ProcessMonitor& operator=(const ProcessMonitor&) = delete;
 
-    bool Start(Callback callback);
+    bool Start(Callback callback, ScanCallback scanCallback = {});
     void Stop();
-    std::vector<ProcessInfo> Snapshot() const;
     bool WaitUntilReady(DWORD timeoutMs) const;
 
     // Used immediately before injection and when processing delayed exit
@@ -49,20 +75,24 @@ public:
 private:
     using ProcessMap = std::unordered_map<DWORD, ProcessInfo>;
 
-    static ProcessMap Enumerate(const ProcessMap& previous);
-    static bool QueryProcessInfo(DWORD pid, ProcessInfo& process);
-    static bool SameProcess(const ProcessInfo& left, const ProcessInfo& right);
+    static ProcessScanResult Enumerate();
+    static bool QueryProcessInfo(DWORD pid, ProcessInfo& process, DWORD& error);
+    static bool SameScanCondition(const ProcessScanResult& left,
+                                  const ProcessScanResult& right);
 
     void Run();
     void Publish(const ProcessEvent& event);
+    void PublishScan(const ProcessScanResult& scan, bool conditionChanged);
     void SignalReady();
 
     mutable std::mutex m_mutex;
     Callback m_callback;
-    ProcessMap m_currentProcesses;
+    ScanCallback m_scanCallback;
     std::thread m_thread;
     HANDLE m_stopEvent = nullptr;
     HANDLE m_readyEvent = nullptr;
     bool m_stopRequested = false;
     bool m_running = false;
+    bool m_hasSuccessfulScan = false;
+    ULONGLONG m_startedAt = 0;
 };

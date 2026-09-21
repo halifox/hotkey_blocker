@@ -12,6 +12,11 @@ enum class RuleKind {
     Directory,
 };
 
+namespace ConfigSchema {
+inline constexpr int kLegacyVersion = 1;
+inline constexpr int kCurrentVersion = 2;
+}  // namespace ConfigSchema
+
 struct AppRule {
     AppRule() = default;
     AppRule(std::wstring rulePath, bool ruleEnabled = true)
@@ -25,14 +30,12 @@ struct AppRule {
 };
 
 struct AppConfig {
-    int version = 2;
+    int version = ConfigSchema::kCurrentVersion;
     std::vector<AppRule> apps;
 };
 
 class ConfigStore final {
 public:
-    static constexpr int kCurrentVersion = 2;
-
     ConfigStore();
     explicit ConfigStore(std::filesystem::path path);
 

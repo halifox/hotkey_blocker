@@ -1,5 +1,6 @@
 #include "ConfigStore.h"
 
+#include "PathUtils.h"
 #include "Win32Support.h"
 
 #include <windows.h>
@@ -491,12 +492,13 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
         error = L"配置文件缺少 Settings 节";
         return false;
     }
-    if (config.version != 1 && config.version != kCurrentVersion) {
+    if (config.version != ConfigSchema::kLegacyVersion &&
+        config.version != ConfigSchema::kCurrentVersion) {
         error = L"配置版本不受支持：" + std::to_wstring(config.version);
         return false;
     }
 
-    const bool legacyConfig = config.version == 1;
+    const bool legacyConfig = config.version == ConfigSchema::kLegacyVersion;
 
     struct IndexedRule {
         int index;
@@ -596,19 +598,22 @@ bool ConfigStore::Load(AppConfig& config, std::wstring& error) const {
     for (IndexedRule& indexedRule : indexedRules) {
         config.apps.push_back(std::move(indexedRule.rule));
     }
-    config.version = kCurrentVersion;
+    config.version = ConfigSchema::kCurrentVersion;
     return true;
 }
 
 bool ConfigStore::Save(const AppConfig& config, std::wstring& error) const {
     error.clear();
 
-    if (config.version != kCurrentVersion) {
+    if (config.version != ConfigSchema::kCurrentVersion) {
         error = L"不能写入不受支持的配置版本：" + std::to_wstring(config.version);
         return false;
     }
 
     AppConfig normalizedConfig = config;
+    if (!PathUtils::ValidateRules(normalizedConfig.apps, error)) {
+        return false;
+    }
     for (AppRule& rule : normalizedConfig.apps) {
         NormalizeHotkeyPolicy(rule.hotkeyPolicy);
         if (!ValidateHotkeyPolicy(rule.hotkeyPolicy)) {

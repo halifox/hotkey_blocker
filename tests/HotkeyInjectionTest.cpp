@@ -128,7 +128,7 @@ int wmain(int argc, wchar_t* argv[]) {
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0) {
         const Injector injector(directory);
         const InjectionResult injection = injector.Inject(processInfo.dwProcessId);
-        if (injection.success) {
+        if (injection.IsSuccess()) {
             SetEvent(release);
             if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
                 DWORD childExitCode = 1;
@@ -163,4 +163,3 @@ int wmain(int argc, wchar_t* argv[]) {
                ? 0
                : 15;
 }
-

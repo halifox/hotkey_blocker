@@ -1,14 +1,21 @@
 #pragma once
 
 #include "ArchitectureDetector.h"
+#include "InjectionStatus.h"
 
 #include <filesystem>
+#include <memory>
 #include <string>
 
 struct InjectionResult {
-    bool success = false;
+    InjectionStatus status = InjectionStatus::Failed;
     ProcessArchitecture architecture = ProcessArchitecture::Unknown;
     std::wstring error;
+    std::shared_ptr<InjectionOperation> pendingOperation;
+
+    bool IsSuccess() const noexcept {
+        return status == InjectionStatus::Succeeded;
+    }
 };
 
 class Injector final {

@@ -28,25 +28,11 @@ bool RuleManager::Load() {
         return false;
     }
 
-    std::vector<AppRule> normalizedRules;
-    normalizedRules.reserve(loadedConfig.apps.size());
-    for (AppRule& rule : loadedConfig.apps) {
-        if (!PathUtils::NormalizeRule(rule, error)) {
-            m_lastError = std::move(error);
-            return false;
-        }
-        const auto duplicate = std::find_if(
-            normalizedRules.begin(), normalizedRules.end(), [&rule](const AppRule& existing) {
-                return PathUtils::Overlaps(existing, rule);
-            });
-        if (duplicate != normalizedRules.end()) {
-            m_lastError = L"配置包含重叠规则：" + rule.path;
-            return false;
-        }
-        normalizedRules.push_back(std::move(rule));
+    if (!PathUtils::NormalizeAndValidateRules(loadedConfig.apps, error)) {
+        m_lastError = std::move(error);
+        return false;
     }
 
-    loadedConfig.apps = std::move(normalizedRules);
     m_config = std::move(loadedConfig);
     m_lastError.clear();
     return true;
@@ -66,15 +52,6 @@ bool RuleManager::AddRule(AppRule rule) {
     std::wstring error;
     if (!PathUtils::NormalizeRule(rule, error)) {
         m_lastError = std::move(error);
-        return false;
-    }
-
-    const auto duplicate = std::find_if(
-        m_config.apps.begin(), m_config.apps.end(), [&rule](const AppRule& existing) {
-            return PathUtils::Overlaps(existing, rule);
-        });
-    if (duplicate != m_config.apps.end()) {
-        m_lastError = L"该应用或文件夹已经添加";
         return false;
     }
 

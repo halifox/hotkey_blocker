@@ -490,9 +490,11 @@ private:
         }
 
         m_blockerService.SetStateChangedCallback([this] { QueueStateRefresh(); });
-        if (!m_blockerService.Start(m_ruleManager.Rules())) {
-            m_logger.Error(L"进程监控启动失败");
-            ShowError(L"启动进程监控失败", L"无法创建进程监控线程");
+        const BlockerServiceStartResult serviceStart =
+            m_blockerService.Start(m_ruleManager.Rules());
+        if (!serviceStart) {
+            m_logger.Error(L"运行服务启动失败：" + serviceStart.error);
+            ShowError(L"启动运行服务失败", serviceStart.error);
         }
         RefreshListView(true);
 
@@ -1431,6 +1433,7 @@ private:
                 return true;
             case AppStatus::Waiting:
             case AppStatus::Injecting:
+            case AppStatus::InjectionPending:
             case AppStatus::Blocked:
             case AppStatus::Disabled:
             default:

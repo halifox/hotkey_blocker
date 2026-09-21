@@ -4,10 +4,98 @@
 #include <windows.h>
 
 #include <filesystem>
+#include <memory>
+#include <utility>
 
 namespace {
 
 constexpr DWORD kInjectionTimeoutMs = 10000;
+
+class RemoteThreadOperation final : public InjectionOperation {
+public:
+    void Attach(HANDLE process, HANDLE thread, LPVOID remotePath) noexcept {
+        m_process = process;
+        m_thread = thread;
+        m_remotePath = remotePath;
+    }
+
+    ~RemoteThreadOperation() override {
+        // LoadLibraryW may still be reading this allocation until its remote thread exits.
+        if (m_thread != nullptr && WaitForSingleObject(m_thread, 0) == WAIT_OBJECT_0 &&
+            m_process != nullptr && m_remotePath != nullptr) {
+            VirtualFreeEx(m_process, m_remotePath, 0, MEM_RELEASE);
+            m_remotePath = nullptr;
+        }
+        CloseHandles();
+    }
+
+    bool TryComplete(InjectionCompletion& completion) override {
+        if (m_thread == nullptr) {
+            completion.status = InjectionStatus::Failed;
+            completion.error = L"远程注入线程句柄无效";
+            return true;
+        }
+
+        const DWORD waitResult = WaitForSingleObject(m_thread, 0);
+        if (waitResult == WAIT_TIMEOUT) {
+            return false;
+        }
+        if (waitResult == WAIT_FAILED) {
+            const std::wstring waitError = Win32Support::ErrorMessage(L"等待远程线程失败");
+            const DWORD processWait = m_process == nullptr ? WAIT_FAILED
+                                                           : WaitForSingleObject(m_process, 0);
+            if (processWait == WAIT_OBJECT_0) {
+                completion.status = InjectionStatus::Failed;
+                completion.error = L"目标进程已退出，无法完成 DLL 加载";
+                m_remotePath = nullptr;
+                CloseHandles();
+                return true;
+            }
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = waitError;
+            return false;
+        }
+        if (waitResult != WAIT_OBJECT_0) {
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = L"等待远程线程返回未知状态";
+            return false;
+        }
+
+        DWORD moduleHandle = 0;
+        if (!GetExitCodeThread(m_thread, &moduleHandle)) {
+            completion.status = InjectionStatus::Indeterminate;
+            completion.error = Win32Support::ErrorMessage(L"获取远程线程结果失败");
+        } else if (moduleHandle == 0) {
+            completion.status = InjectionStatus::Failed;
+            completion.error = L"目标进程拒绝加载 Hook DLL";
+        } else {
+            completion.status = InjectionStatus::Succeeded;
+        }
+
+        if (m_process != nullptr && m_remotePath != nullptr) {
+            VirtualFreeEx(m_process, m_remotePath, 0, MEM_RELEASE);
+            m_remotePath = nullptr;
+        }
+        CloseHandles();
+        return true;
+    }
+
+private:
+    void CloseHandles() {
+        if (m_thread != nullptr) {
+            CloseHandle(m_thread);
+            m_thread = nullptr;
+        }
+        if (m_process != nullptr) {
+            CloseHandle(m_process);
+            m_process = nullptr;
+        }
+    }
+
+    HANDLE m_process = nullptr;
+    HANDLE m_thread = nullptr;
+    LPVOID m_remotePath = nullptr;
+};
 
 std::wstring FullPath(const std::wstring& path) {
     DWORD required = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
@@ -26,7 +114,8 @@ std::wstring FullPath(const std::wstring& path) {
 
 }  // namespace
 
-RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPath) {
+RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPath,
+                                           bool waitForCompletion) {
     RemoteInjectionResult result;
     const std::wstring absoluteDllPath = FullPath(dllPath);
     if (absoluteDllPath.empty()) {
@@ -78,6 +167,16 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
         return result;
     }
 
+    std::shared_ptr<RemoteThreadOperation> operation;
+    try {
+        operation = std::make_shared<RemoteThreadOperation>();
+    } catch (...) {
+        result.error = L"无法保留远程注入操作状态";
+        VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
+        CloseHandle(process);
+        return result;
+    }
+
     HANDLE remoteThread = CreateRemoteThread(
         process, nullptr, 0,
         reinterpret_cast<LPTHREAD_START_ROUTINE>(loadLibrary), remotePath, 0, nullptr);
@@ -87,36 +186,23 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
         CloseHandle(process);
         return result;
     }
+    operation->Attach(process, remoteThread, remotePath);
 
-    const DWORD waitResult = WaitForSingleObject(remoteThread, kInjectionTimeoutMs);
-    if (waitResult == WAIT_TIMEOUT) {
-        // The remote thread may still be reading remotePath. Leave that
-        // allocation owned by the target process and close our handles so a
-        // stalled target cannot block the service indefinitely.
-        result.error = L"等待远程 DLL 加载超时";
-        CloseHandle(remoteThread);
-        CloseHandle(process);
-        return result;
-    }
+    const DWORD waitResult = WaitForSingleObject(
+        remoteThread, waitForCompletion ? INFINITE : kInjectionTimeoutMs);
     if (waitResult != WAIT_OBJECT_0) {
-        result.error = Win32Support::ErrorMessage(L"等待远程线程失败");
-        VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
-        CloseHandle(remoteThread);
-        CloseHandle(process);
+        result.status = InjectionStatus::Pending;
+        result.error = waitResult == WAIT_TIMEOUT
+                           ? L"等待远程 DLL 加载超时"
+                           : Win32Support::ErrorMessage(L"等待远程线程失败");
+        result.pendingOperation = std::move(operation);
         return result;
     }
 
-    DWORD moduleHandle = 0;
-    if (!GetExitCodeThread(remoteThread, &moduleHandle)) {
-        result.error = Win32Support::ErrorMessage(L"获取远程线程结果失败");
-    } else if (moduleHandle == 0) {
-        result.error = L"目标进程拒绝加载 Hook DLL";
-    } else {
-        result.success = true;
+    InjectionCompletion completion;
+    if (operation->TryComplete(completion)) {
+        result.status = completion.status;
+        result.error = std::move(completion.error);
     }
-
-    VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
-    CloseHandle(remoteThread);
-    CloseHandle(process);
     return result;
 }
