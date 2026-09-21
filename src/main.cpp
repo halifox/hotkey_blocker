@@ -721,14 +721,7 @@ private:
             }
         }
         if (header != nullptr && header->idFrom == IDC_APP_LIST && header->code == NM_DBLCLK) {
-            int rowIndex = -1;
-            int subItemIndex = -1;
-            if (GetActionHitAtCursor(rowIndex, subItemIndex)) {
-                handled = TRUE;
-                return 0;
-            }
             handled = TRUE;
-            OpenSelectedLocation();
             return 0;
         }
         handled = FALSE;
@@ -1436,21 +1429,6 @@ private:
         }
         m_blockerService.UpdateRules(m_ruleManager.Rules());
         RefreshListView(true);
-    }
-
-    void OpenSelectedLocation() {
-        const int index = SelectedIndex();
-        if (index < 0 || index >= static_cast<int>(m_renderedRows.size())) {
-            return;
-        }
-
-        const std::wstring parameters = L"/select,\"" +
-                                        m_renderedRows[static_cast<std::size_t>(index)].path + L"\"";
-        const HINSTANCE result = ShellExecuteW(m_hWnd, L"open", L"explorer.exe",
-                                               parameters.c_str(), nullptr, SW_SHOWNORMAL);
-        if (reinterpret_cast<INT_PTR>(result) <= 32) {
-            ShowError(L"打开文件位置失败", L"无法打开资源管理器");
-        }
     }
 
     void UpdateAutoStart() {
