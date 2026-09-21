@@ -20,10 +20,6 @@ set_target_properties(Detours::Detours PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${DETOURS_INCLUDE_DIR}"
 )
 
-set(HKB_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin" CACHE PATH
-        "Directory for the runtime artifacts")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}")
-
 set(HKB_WINDOWS_DEFINITIONS
         UNICODE
         _UNICODE
@@ -148,9 +144,6 @@ if (HKB_BUILD_TESTS)
     add_executable(hotkey_probe tests/HotkeyProbe.cpp)
     hkb_configure_target(hotkey_probe)
     target_link_libraries(hotkey_probe PRIVATE user32)
-    set_target_properties(hotkey_probe PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
-    )
 
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_executable(hkb_injection_test
@@ -164,9 +157,6 @@ if (HKB_BUILD_TESTS)
         hkb_configure_target(hkb_injection_test)
         target_link_libraries(hkb_injection_test PRIVATE ole32 shell32 user32)
         add_dependencies(hkb_injection_test hotkey_hook hotkey_probe)
-        set_target_properties(hkb_injection_test PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
-        )
         add_test(NAME hkb_register_hotkey_injection COMMAND hkb_injection_test)
 
         add_executable(hkb_blocker_service_integration_test
@@ -190,9 +180,6 @@ if (HKB_BUILD_TESTS)
                 user32
         )
         add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
-        set_target_properties(hkb_blocker_service_integration_test PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY "${HKB_OUTPUT_DIR}"
-        )
         add_test(NAME hkb_blocker_service_integration
                 COMMAND hkb_blocker_service_integration_test)
     endif ()
@@ -235,11 +222,10 @@ else ()
             RUNTIME DESTINATION .
     )
 
-    set(HKB_WIN32_RUNTIME_DIR "${HKB_OUTPUT_DIR}/win32" CACHE PATH
-            "Directory containing the 32-bit Hook DLL and injector for an x64 package")
+    set(HKB_X86_RELEASE_BINARY_DIR "${CMAKE_SOURCE_DIR}/build/x86-release-vcpkg")
     install(FILES
-            "${HKB_WIN32_RUNTIME_DIR}/HotkeyHook32.dll"
-            "${HKB_WIN32_RUNTIME_DIR}/HotkeyBlockerInjector32.exe"
+            "${HKB_X86_RELEASE_BINARY_DIR}/HotkeyHook32.dll"
+            "${HKB_X86_RELEASE_BINARY_DIR}/HotkeyBlockerInjector32.exe"
             DESTINATION win32
     )
 endif ()

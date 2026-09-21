@@ -52,7 +52,7 @@ jobs:
       - name: Verify runtime artifacts
         shell: pwsh
         run: |
-          $root = "out/bin/${{ matrix.architecture }}-release"
+          $root = "build/${{ matrix.architecture }}-release-vcpkg"
           $hookName = if ('${{ matrix.architecture }}' -eq 'x64') { 'HotkeyHook64.dll' } else { 'HotkeyHook32.dll' }
           $required = @(
             "$root/HotkeyBlocker.exe",
@@ -69,7 +69,7 @@ jobs:
 
       - name: Run tests
         shell: pwsh
-        run: ctest --test-dir "out/build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure
+        run: ctest --test-dir "build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure
 
       - name: Check patch whitespace
         shell: pwsh

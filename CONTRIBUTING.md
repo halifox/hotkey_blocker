@@ -52,13 +52,13 @@
 ```powershell
 cmake --preset x64-release
 cmake --build --preset x64-release --parallel
-ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+ctest --test-dir build/x64-release-vcpkg --output-on-failure
 
 # 在 x86 Developer PowerShell 中执行
 $env:VCPKG_ROOT = 'C:/dev/vcpkg'
 cmake --preset x86-release
 cmake --build --preset x86-release --parallel
-ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
+ctest --test-dir build/x86-release-vcpkg --output-on-failure
 ```
 
 涉及安装包时，按 [构建、测试和打包](docs/BUILD.md) 中的命令行步骤先生成 x86 运行组件，再生成 x64 安装包。
@@ -73,6 +73,6 @@ ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 - [ ] 按需更新 README、用户指南、安全说明或变更记录。
 - [ ] 验证相关 x86/x64 构建。
 - [ ] 运行相关架构的 CTest，且结果通过。
-- [ ] 未提交 `out/`、`bin/`、`cmake-build-*` 或个人配置。
+- [ ] 未提交 `build/`、旧的 `out/`、`bin/`、`cmake-build-*` 或个人配置。
 - [ ] 未提交真实用户路径、日志或敏感数据。
 - [ ] 新增第三方代码时补充来源和许可证声明。

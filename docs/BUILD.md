@@ -61,12 +61,12 @@ x86 构建需要在 x86 Developer PowerShell 中使用 `x86-release` 或 `x86-de
 
 ## 输出目录
 
-- `out/build/<preset>-vcpkg/`：CMake/Ninja 中间文件和 manifest-mode 依赖
-- `out/bin/x64-release/`：x64 可执行文件和 x64 Hook DLL
-- `out/bin/x86-release/`：x86 可执行文件、Hook DLL 和 x86 注入辅助程序
-- `out/packages/`：安装包和 SHA-256 校验文件
+- `build/<preset>-vcpkg/`：该 preset 的 CMake/Ninja 中间文件、manifest-mode 依赖和架构运行文件
+- `build/x64-release-vcpkg/`：x64 主程序和 Hook DLL
+- `build/x86-release-vcpkg/`：x86 主程序、Hook DLL 和注入辅助程序
+- `build/packages/`：最终安装包和 SHA-256 校验文件
 
-上述目录均被 `.gitignore` 忽略，不应提交到源码仓库。
+上述当前构建目录均被 `.gitignore` 忽略，不应提交到源码仓库。已有的旧 `out/` 目录会继续被忽略并保留；新构建不再写入该目录。
 
 ## 运行库、测试与发布
 
@@ -75,8 +75,8 @@ MSVC 目标默认使用静态运行库（Release 为 `/MT`，Debug 为 `/MTd`）
 测试目标默认启用。构建后运行：
 
 ```powershell
-ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
-ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
+ctest --test-dir build/x64-release-vcpkg --output-on-failure
+ctest --test-dir build/x86-release-vcpkg --output-on-failure
 ```
 
 测试覆盖配置读写、快捷键策略判定与持久化、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
@@ -85,7 +85,7 @@ ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 
 Windows 可能对从互联网下载的未签名程序显示未知发布者或 SmartScreen 警告，这是本项目发布策略的预期行为。不要要求用户关闭系统保护；发布页面应同时提供 SHA-256 校验文件，供用户核对下载文件的完整性。
 
-GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。Release 工作流会在 `out/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
+GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。Release 工作流会在 `build/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
 
 程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀，并将版本通过 `-DHKB_PROJECT_VERSION` 传给 x86 和 x64 配置；该版本会同时写入主窗口标题栏、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
 
@@ -93,13 +93,13 @@ GitHub Release 工作流不需要任何证书或签名相关的 Repository Secre
 
 x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。下面以 `1.0.0` 为例；发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，传入去掉 `v` 的版本号。
 
-从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `out/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
+从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `build/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
 
 ```powershell
 cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x64.cmake
 ```
 
-把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `out/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
+把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `build/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
 
 卸载程序会先结束正在运行的主程序，再删除 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HotkeyBlocker`，并同步删除 `%LOCALAPPDATA%\HotkeyBlocker` 配置和日志目录，避免留下失效的开机启动项或用户数据。
 
@@ -133,7 +133,7 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 
 ### x64 构建时找不到 32 位组件
 
-使用上面的 `cmake -P cmake/package-x64.cmake` 入口打包，它会先构建 `out/bin/x86-release/` 中的 Hook DLL 和注入辅助程序，再构建 x64 并运行 CPack。若手动调用 x64 的 `package` 目标，则需要先自行生成这些 x86 组件。
+使用上面的 `cmake -P cmake/package-x64.cmake` 入口打包，它会先将 x86 Hook DLL 和注入辅助程序构建到 `build/x86-release-vcpkg/`，再构建 x64 并运行 CPack。若手动调用 x64 的 `package` 目标，则需要先自行生成这些 x86 组件。
 
 ### 注入失败
 

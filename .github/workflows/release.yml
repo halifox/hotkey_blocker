@@ -78,8 +78,8 @@ jobs:
         with:
           name: hkb-x86-runtime
           path: |
-            out/bin/x86-release/HotkeyHook32.dll
-            out/bin/x86-release/HotkeyBlockerInjector32.exe
+            build/x86-release-vcpkg/HotkeyHook32.dll
+            build/x86-release-vcpkg/HotkeyBlockerInjector32.exe
           if-no-files-found: error
 
   package-x64:
@@ -101,7 +101,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: hkb-x86-runtime
-          path: out/bin/x86-release
+          path: build/x86-release-vcpkg
 
       - name: Install NSIS
         shell: pwsh
@@ -150,26 +150,26 @@ jobs:
           cmake --build --preset x64-release --target package --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $buildDirectory = 'out/build/x64-release-vcpkg'
+          $buildDirectory = 'build/x64-release-vcpkg'
           $packageName = "HotkeyBlocker-$env:HKB_RELEASE_VERSION-x64.exe"
           $packageFile = Join-Path $buildDirectory $packageName
           if (-not (Test-Path -LiteralPath $packageFile)) {
             throw "CPack did not create the expected installer: $packageFile"
           }
-          New-Item -ItemType Directory -Path 'out/packages' -Force | Out-Null
-          Copy-Item -LiteralPath $packageFile -Destination 'out/packages' -Force
-          $hash = (Get-FileHash -LiteralPath (Join-Path 'out/packages' $packageName) -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $packageName" | Set-Content -LiteralPath (Join-Path 'out/packages' "$packageName.sha256") -Encoding ASCII
+          New-Item -ItemType Directory -Path 'build/packages' -Force | Out-Null
+          Copy-Item -LiteralPath $packageFile -Destination 'build/packages' -Force
+          $hash = (Get-FileHash -LiteralPath (Join-Path 'build/packages' $packageName) -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $packageName" | Set-Content -LiteralPath (Join-Path 'build/packages' "$packageName.sha256") -Encoding ASCII
 
       - name: List package contents
         shell: pwsh
-        run: Get-ChildItem -LiteralPath out/packages -File | Select-Object Name, Length
+        run: Get-ChildItem -LiteralPath build/packages -File | Select-Object Name, Length
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: HotkeyBlocker-${{ github.ref_name }}
-          path: out/packages/*
+          path: build/packages/*
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -178,5 +178,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = Get-ChildItem -LiteralPath out/packages -File | ForEach-Object { $_.FullName }
+          $assets = Get-ChildItem -LiteralPath build/packages -File | ForEach-Object { $_.FullName }
           gh release create $env:GITHUB_REF_NAME @assets --generate-notes --verify-tag

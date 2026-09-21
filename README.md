@@ -100,17 +100,17 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 构建测试：
 
 ```powershell
-ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+ctest --test-dir build/x64-release-vcpkg --output-on-failure
 ```
 
 主要产物：
 
 | 路径 | 内容 |
 | --- | --- |
-| `out/build/<preset>-vcpkg/` | CMake/Ninja 中间文件和 vcpkg 依赖 |
-| `out/bin/x64-release/` | x64 主程序和 Hook DLL |
-| `out/bin/x86-release/` | x86 主程序、Hook DLL 和注入辅助程序 |
-| `out/packages/` | NSIS 安装包及 SHA-256 校验文件 |
+| `build/<preset>-vcpkg/` | 各 preset 的 CMake/Ninja 中间文件、vcpkg 依赖和运行文件 |
+| `build/x64-release-vcpkg/` | x64 主程序和 Hook DLL |
+| `build/x86-release-vcpkg/` | x86 主程序、Hook DLL 和注入辅助程序 |
+| `build/packages/` | NSIS 安装包及 SHA-256 校验文件 |
 
 完整的构建、测试、打包和 CI 说明见 [构建、测试和打包](docs/BUILD.md)。
 首次配置会通过 vcpkg 获取并静态构建 CPR 和 nlohmann/json 及其依赖。
@@ -120,7 +120,7 @@ ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 源码构建完成后，可以直接运行主程序：
 
 ```powershell
-.\out\bin\x64-release\HotkeyBlocker.exe
+.\build\x64-release-vcpkg\HotkeyBlocker.exe
 ```
 
 程序启动后会显示主窗口并创建托盘图标。关闭主窗口只会将其隐藏；需要结束进程时，请使用托盘菜单中的“退出”。登录时启动会以后台模式启动程序。
@@ -207,7 +207,7 @@ ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```powershell
 cmake --preset x64-release
 cmake --build --preset x64-release --parallel
-ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+ctest --test-dir build/x64-release-vcpkg --output-on-failure
 ```
 
 涉及 Hook、注入、权限或安全边界的修改，请同时更新 [用户指南](docs/USER_GUIDE.md)、[安全说明](SECURITY.md) 或 [构建说明](docs/BUILD.md) 中对应的行为描述。

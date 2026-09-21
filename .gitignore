@@ -1,5 +1,7 @@
 /.idea/
 /bin/
 /cmake-*/
+# Keep legacy generated files ignored; current presets use /build/.
 /out/
+/build/
 vcpkg_installed/

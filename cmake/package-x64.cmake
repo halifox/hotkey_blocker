@@ -37,19 +37,35 @@ get_filename_component(_source_dir "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 file(TO_NATIVE_PATH "${VCPKG_ROOT}" _vcpkg_root_native)
 file(TO_NATIVE_PATH "${_source_dir}" _source_dir_native)
 file(TO_NATIVE_PATH "${_vs_dev_cmd}" _vs_dev_cmd_native)
+set(_vs_ninja_dir "${_vs_install_dir}/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja")
+if (EXISTS "${_vs_ninja_dir}/ninja.exe")
+    file(TO_NATIVE_PATH "${_vs_ninja_dir}" _vs_ninja_dir_native)
+    set(_ninja_argument "\"-DCMAKE_MAKE_PROGRAM=${_vs_ninja_dir}/ninja.exe\"")
+endif ()
 
-set(_driver_dir "${_source_dir}/out/build")
+set(_driver_dir "$ENV{TEMP}")
+if (_driver_dir STREQUAL "")
+    set(_driver_dir "${_source_dir}/build")
+endif ()
+file(TO_CMAKE_PATH "${_driver_dir}" _driver_dir)
 file(MAKE_DIRECTORY "${_driver_dir}")
 
 function(hkb_run_vs_build architecture driver_name)
-    set(_driver_file "${_driver_dir}/${driver_name}")
+    string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef _driver_id)
+    set(_driver_file "${_driver_dir}/${driver_name}-${_driver_id}.cmd")
+    if (EXISTS "${_driver_file}")
+        message(FATAL_ERROR "Refusing to overwrite an existing temporary build driver: ${_driver_file}")
+    endif ()
     set(_driver_content "@echo off\r\nsetlocal\r\n")
-    string(APPEND _driver_content "set \"VCPKG_ROOT=${_vcpkg_root_native}\"\r\n")
     string(APPEND _driver_content "cd /d \"${_source_dir_native}\"\r\n")
     string(APPEND _driver_content "if errorlevel 1 exit /b 1\r\n")
     string(APPEND _driver_content
             "call \"${_vs_dev_cmd_native}\" -arch=${architecture} -host_arch=x64\r\n")
     string(APPEND _driver_content "if errorlevel 1 exit /b 1\r\n")
+    string(APPEND _driver_content "set \"VCPKG_ROOT=${_vcpkg_root_native}\"\r\n")
+    if (DEFINED _vs_ninja_dir_native)
+        string(APPEND _driver_content "set \"PATH=${_vs_ninja_dir_native};%PATH%\"\r\n")
+    endif ()
     foreach (_command IN LISTS ARGN)
         string(APPEND _driver_content "${_command}\r\n")
         string(APPEND _driver_content "if errorlevel 1 exit /b 1\r\n")
@@ -68,16 +84,16 @@ endfunction()
 
 set(_version_argument "-DHKB_PROJECT_VERSION=${HKB_PROJECT_VERSION}")
 hkb_run_vs_build(x86 "package-x64-x86.cmd"
-        "\"${CMAKE_COMMAND}\" --fresh --preset x86-release \"${_version_argument}\""
+        "\"${CMAKE_COMMAND}\" --preset x86-release \"${_version_argument}\" ${_ninja_argument}"
         "\"${CMAKE_COMMAND}\" --build --preset x86-release --target hotkey_hook hotkey_blocker_injector32 --parallel")
 hkb_run_vs_build(x64 "package-x64-x64.cmd"
-        "\"${CMAKE_COMMAND}\" --fresh --preset x64-release \"${_version_argument}\""
+        "\"${CMAKE_COMMAND}\" --preset x64-release \"${_version_argument}\" ${_ninja_argument}"
         "\"${CMAKE_COMMAND}\" --build --preset x64-release --target hkb hotkey_hook --parallel"
         "\"${CMAKE_COMMAND}\" --build --preset x64-release --target package --parallel")
 
 set(_package_name "HotkeyBlocker-${HKB_PROJECT_VERSION}-x64.exe")
-set(_built_package "${_source_dir}/out/build/x64-release-vcpkg/${_package_name}")
-set(_package_dir "${_source_dir}/out/packages")
+set(_built_package "${_source_dir}/build/x64-release-vcpkg/${_package_name}")
+set(_package_dir "${_source_dir}/build/packages")
 set(_package_file "${_package_dir}/${_package_name}")
 if (NOT EXISTS "${_built_package}")
     message(FATAL_ERROR "CPack did not create the expected installer: ${_built_package}")
