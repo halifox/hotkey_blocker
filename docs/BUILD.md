@@ -96,7 +96,7 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `out/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
 
 ```powershell
-cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION=1.0.0 -P cmake/package-x64.cmake
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x64.cmake
 ```
 
 把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `out/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。

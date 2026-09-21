@@ -94,7 +94,7 @@
 从 Visual Studio Developer PowerShell 的仓库根目录运行下面这条命令，即可从干净状态构建并打包完整的 x64 安装程序：
 
 ```powershell
-cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION=1.0.0 -P cmake/package-x64.cmake
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x64.cmake
 ```
 
 把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录。该命令会构建 x86 Hook DLL 和注入辅助程序、x64 主程序和 Hook DLL，然后生成包含这些文件的 x64 NSIS 安装包及 SHA-256 文件。单架构日常构建仍可使用 `x86-release`、`x86-debug`、`x64-release` 和 `x64-debug` CMake presets。
