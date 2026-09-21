@@ -55,6 +55,7 @@ cmake --build --preset x64-release --parallel
 ctest --test-dir build/x64-release-vcpkg --output-on-failure
 
 # 在 x86 Developer PowerShell 中执行
+# 将示例路径替换为本机的 vcpkg 根目录
 $env:VCPKG_ROOT = 'C:/dev/vcpkg'
 cmake --preset x86-release
 cmake --build --preset x86-release --parallel

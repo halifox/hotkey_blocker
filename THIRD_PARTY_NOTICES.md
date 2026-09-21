@@ -32,7 +32,7 @@ MS-PL 的标准文本可从 [Open Source Initiative](https://opensource.org/lice
 
 ## Windows SDK 与系统库
 
-项目使用 Windows SDK、ATL、系统库以及 Visual C++ 运行时构建。上述组件由 Microsoft 单独授权，不作为本仓库的第三方源码重新授权。构建和运行要求请参见 [构建、测试和打包](docs/BUILD.md)。
+项目使用 Windows SDK、ATL、系统库以及 Visual C++ 运行时构建。上述组件由 Microsoft 单独授权，不作为本仓库的第三方源码重新授权。
 
 ## 分发要求
 

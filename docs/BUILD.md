@@ -68,7 +68,7 @@ x86 构建需要在 x86 Developer PowerShell 中使用 `x86-release` 或 `x86-de
 
 上述当前构建目录均被 `.gitignore` 忽略，不应提交到源码仓库。已有的旧 `out/` 目录会继续被忽略并保留；新构建不再写入该目录。
 
-## 运行库、测试与发布
+## 运行库与测试
 
 MSVC 目标默认使用静态运行库（Release 为 `/MT`，Debug 为 `/MTd`）。因此由本项目构建的主程序、Hook DLL 和辅助程序不要求目标机器另外安装 Visual C++ Redistributable；这不代表可以省略 Windows SDK、ATL 或构建机上的 MSVC 工具链。
 
@@ -80,14 +80,6 @@ ctest --test-dir build/x86-release-vcpkg --output-on-failure
 ```
 
 测试覆盖配置读写、快捷键策略判定与持久化、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
-
-本项目的本地构建和正式发布均不使用 Authenticode 签名。发布工作流不会读取证书，也不会对主程序、Hook DLL、x86 注入辅助程序或安装包执行签名。
-
-Windows 可能对从互联网下载的未签名程序显示未知发布者或 SmartScreen 警告，这是本项目发布策略的预期行为。不要要求用户关闭系统保护；发布页面应同时提供 SHA-256 校验文件，供用户核对下载文件的完整性。
-
-GitHub Release 工作流不需要任何证书或签名相关的 Repository Secret。Release 工作流会在 `build/packages/` 生成未签名的安装包和同名的 SHA-256 校验文件。
-
-程序内版本号由 CMake 在构建时生成。推送 `vMAJOR.MINOR.PATCH` Tag 后，Release 工作流会去掉 Tag 的 `v` 前缀，并将版本通过 `-DHKB_PROJECT_VERSION` 传给 x86 和 x64 配置；该版本会同时写入主窗口标题栏、Windows 文件属性、安装包文件名和 GitHub Release。版本检查读取同一仓库的最新稳定 Release。
 
 ## 完整安装包
 
@@ -118,12 +110,6 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 - `licenses/curl/copyright`
 - `licenses/nlohmann-json/copyright`
 - `licenses/zlib/copyright`
-
-## CI
-
-`.github/workflows/ci.yml` 直接使用 CMake preset 命令在 Windows runner 上分别构建 x86 和 x64 Release，并运行 CTest。`.github/workflows/release.yml` 先构建 x86 运行组件，再构建 x64 安装包并生成 SHA-256 文件。工作流在 YAML 中初始化匹配架构的 MSVC 环境，然后直接调用 CMake。
-
-项目没有将 Visual Studio 编译器提交到仓库，因此不同 Visual Studio 版本不保证产生逐字节相同的二进制。若需要长期可复现的发布结果，应固定 GitHub runner、Visual Studio 工具链版本，并保存发布构建日志。
 
 ## 常见问题
 
