@@ -52,8 +52,8 @@
 ```powershell
 .\scripts\build.ps1 -Architecture x64 -Configuration Release
 .\scripts\build.ps1 -Architecture x86 -Configuration Release
-ctest --test-dir out/build/x64-release --output-on-failure
-ctest --test-dir out/build/x86-release --output-on-failure
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 ```
 
 涉及安装包时再执行：

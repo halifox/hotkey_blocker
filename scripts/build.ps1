@@ -55,10 +55,37 @@ function Get-VsDevCommandPath {
     return $vsDevCmd
 }
 
+function Resolve-VcpkgRoot {
+    $candidates = @()
+    foreach ($candidate in @($env:VCPKG_ROOT, $env:VCPKG_INSTALLATION_ROOT)) {
+        if ($candidate) {
+            $candidates += $candidate
+        }
+    }
+
+    $vcpkgCommand = Get-Command vcpkg.exe -ErrorAction SilentlyContinue
+    if ($vcpkgCommand -and $vcpkgCommand.Source) {
+        $candidates += Split-Path -Parent $vcpkgCommand.Source
+    }
+
+    foreach ($candidate in $candidates) {
+        $root = [System.IO.Path]::GetFullPath($candidate)
+        if ((Test-Path -LiteralPath (Join-Path $root 'vcpkg.exe')) -and
+            (Test-Path -LiteralPath (Join-Path $root 'scripts\buildsystems\vcpkg.cmake'))) {
+            return $root
+        }
+    }
+
+    throw '找不到 vcpkg。请安装 vcpkg 并设置 VCPKG_ROOT（或 VCPKG_INSTALLATION_ROOT）。'
+}
+
 function Invoke-VsCommand {
     param(
         [Parameter(Mandatory = $true)]
         [string]$TargetArchitecture,
+
+        [Parameter(Mandatory = $true)]
+        [string]$VcpkgRoot,
 
         [Parameter(Mandatory = $true)]
         [string]$Command
@@ -69,6 +96,7 @@ function Invoke-VsCommand {
 @echo off
 call "$vsDevCmd" -arch=$TargetArchitecture -host_arch=x64
 if errorlevel 1 exit /b %errorlevel%
+set "VCPKG_ROOT=$VcpkgRoot"
 $Command
 exit /b %errorlevel%
 "@
@@ -91,8 +119,9 @@ function Remove-BuildOutputs {
     )
 
     foreach ($name in $Presets) {
-        foreach ($root in @($buildRoot, $binRoot)) {
-            $path = Join-Path $root $name
+        $buildPath = Join-Path $buildRoot "$name-vcpkg"
+        $outputPath = Join-Path $binRoot $name
+        foreach ($path in @($buildPath, $outputPath)) {
             if (Test-Path -LiteralPath $path) {
                 Remove-Item -LiteralPath $path -Recurse -Force
             }
@@ -113,7 +142,7 @@ function Invoke-ConfigureAndBuild {
     $command = "cmake --preset `"$TargetPreset`"$versionArgument && cmake --build --preset `"$TargetPreset`" --parallel"
 
     Write-Host "==> $TargetArchitecture $Configuration ($TargetPreset)"
-    Invoke-VsCommand -TargetArchitecture $TargetArchitecture -Command $command
+    Invoke-VsCommand -TargetArchitecture $TargetArchitecture -VcpkgRoot $vcpkgRoot -Command $command
 }
 
 function Invoke-CreatePackage {
@@ -126,10 +155,12 @@ function Invoke-CreatePackage {
     )
 
     Write-Host "==> package $TargetArchitecture $Configuration ($TargetPreset)"
-    Invoke-VsCommand -TargetArchitecture $TargetArchitecture -Command "cmake --build --preset `"$TargetPreset`" --target package"
+    Invoke-VsCommand -TargetArchitecture $TargetArchitecture -VcpkgRoot $vcpkgRoot -Command "cmake --build --preset `"$TargetPreset`" --target package"
 }
 
 $vsDevCmd = Get-VsDevCommandPath
+$vcpkgRoot = Resolve-VcpkgRoot
+$env:VCPKG_ROOT = $vcpkgRoot
 $presetsToBuild = @($preset)
 if ($Package -and $Architecture -eq 'x64') {
     $presetsToBuild = @("x86-$($Configuration.ToLowerInvariant())", $preset)
@@ -140,7 +171,7 @@ if ($Clean) {
 }
 
 if ($Package) {
-    $targetBuildDir = Join-Path $buildRoot $preset
+    $targetBuildDir = Join-Path $buildRoot "$preset-vcpkg"
     if (Test-Path -LiteralPath $targetBuildDir) {
         Get-ChildItem -LiteralPath $targetBuildDir -File -Filter 'HotkeyBlocker-*.exe' -ErrorAction SilentlyContinue |
             Remove-Item -Force
@@ -162,7 +193,7 @@ if ($Package) {
 
 if ($Package) {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
-    $targetBuildDir = Join-Path $buildRoot $preset
+    $targetBuildDir = Join-Path $buildRoot "$preset-vcpkg"
     $packages = Get-ChildItem -LiteralPath $targetBuildDir -File -Filter 'HotkeyBlocker-*.exe'
     if (-not $packages) {
         throw "CPack 没有在 $targetBuildDir 生成安装包。"

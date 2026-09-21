@@ -45,7 +45,7 @@ jobs:
 
       - name: Run tests
         shell: pwsh
-        run: ctest --test-dir "out/build/${{ matrix.architecture }}-release" --output-on-failure
+        run: ctest --test-dir "out/build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure
 
       - name: Check patch whitespace
         shell: pwsh

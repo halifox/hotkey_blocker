@@ -2,3 +2,4 @@
 /bin/
 /cmake-*/
 /out/
+vcpkg_installed/

@@ -1,0 +1,11 @@
+{
+  "name": "hotkey-blocker",
+  "version-string": "1.0.0",
+  "builtin-baseline": "0c8f465c549616e897a34b9393054931fda6339c",
+  "dependencies": [
+    "cpr",
+    "detours",
+    "nlohmann-json",
+    "wtl"
+  ]
+}

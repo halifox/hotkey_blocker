@@ -2,7 +2,7 @@
 
 #include "HotkeyPolicyTransport.h"
 
-#include <detours.h>
+#include <detours/detours.h>
 
 #include <mutex>
 #include <utility>

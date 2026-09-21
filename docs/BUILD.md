@@ -14,9 +14,11 @@
 - ATL（WTL 依赖 ATL 头文件）
 - CMake 3.25 或更高版本
 - Ninja
+- vcpkg
 - PowerShell 5.1 或更高版本
 
 构建脚本通过 `vswhere.exe` 查找 Visual Studio，并调用对应的 `VsDevCmd.bat` 初始化 MSVC 环境。手工执行 CMake 命令时，请先进入 Visual Studio Developer PowerShell，或执行相应的 `VsDevCmd.bat`。
+请将 vcpkg 根目录设置为 `VCPKG_ROOT`；GitHub Actions Windows Runner 提供的 `VCPKG_INSTALLATION_ROOT` 也会被构建脚本识别。首次配置会按 `vcpkg.json` 下载并构建 Detours、WTL、CPR、libcurl、nlohmann/json 及其依赖。依赖采用静态 triplet，与本项目的静态 MSVC 运行库一致。
 
 ## 推荐构建方式
 
@@ -39,7 +41,7 @@
 .\scripts\build.ps1 -Architecture x64 -Configuration Release -Clean
 ```
 
-`-Clean` 只删除脚本管理的 `out/build/<preset>` 和 `out/bin/<preset>` 目录，不会操作源码目录或其他构建目录。
+`-Clean` 只删除脚本管理的 `out/build/<preset>-vcpkg` 和 `out/bin/<preset>` 目录，不会操作源码目录或其他构建目录。
 
 ## CMake Presets
 
@@ -60,11 +62,13 @@ cmake --preset x64-release
 cmake --build --preset x64-release --parallel
 ```
 
+手工使用 preset 前，还需在当前 shell 设置 vcpkg 路径，例如 `$env:VCPKG_ROOT = 'C:\vcpkg'`。
+
 x86 构建需要在 x86 MSVC 环境中执行。构建脚本会自动使用 `VsDevCmd.bat -arch=x86 -host_arch=x64` 或 `-arch=x64 -host_arch=x64`，适合重复构建和 CI 环境。
 
 ## 输出目录
 
-- `out/build/<preset>/`：CMake/Ninja 中间文件
+- `out/build/<preset>-vcpkg/`：CMake/Ninja 中间文件和 manifest-mode 依赖
 - `out/bin/x64-release/`：x64 可执行文件和 x64 Hook DLL
 - `out/bin/x86-release/`：x86 可执行文件、Hook DLL 和 x86 注入辅助程序
 - `out/packages/`：安装包和 SHA-256 校验文件
@@ -78,8 +82,8 @@ MSVC 目标默认使用静态运行库（Release 为 `/MT`，Debug 为 `/MTd`）
 测试目标默认启用。构建后运行：
 
 ```powershell
-ctest --test-dir out/build/x64-release --output-on-failure
-ctest --test-dir out/build/x86-release --output-on-failure
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
+ctest --test-dir out/build/x86-release-vcpkg --output-on-failure
 ```
 
 测试覆盖配置读写、快捷键策略判定与持久化、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
@@ -125,7 +129,12 @@ x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可�
 - `LICENSE`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/USER_GUIDE.md`
-- `licenses/detours/LICENSE.md`
+- `licenses/detours/copyright`
+- `licenses/wtl/copyright`
+- `licenses/cpr/copyright`
+- `licenses/curl/copyright`
+- `licenses/nlohmann-json/copyright`
+- `licenses/zlib/copyright`
 
 ## CI
 

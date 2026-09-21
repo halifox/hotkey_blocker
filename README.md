@@ -87,6 +87,7 @@
 - MSVC x86/x64 编译工具、Windows SDK 和 ATL
 - CMake 3.25 或更高版本
 - Ninja
+- vcpkg（设置 `VCPKG_ROOT` 环境变量）
 - PowerShell 5.1 或更高版本
 
 ### 构建
@@ -120,19 +121,20 @@ cmake --build --preset x64-release --parallel
 构建测试：
 
 ```powershell
-ctest --test-dir out/build/x64-release --output-on-failure
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```
 
 主要产物：
 
 | 路径 | 内容 |
 | --- | --- |
-| `out/build/<preset>/` | CMake/Ninja 中间文件 |
+| `out/build/<preset>-vcpkg/` | CMake/Ninja 中间文件和 vcpkg 依赖 |
 | `out/bin/x64-release/` | x64 主程序和 Hook DLL |
 | `out/bin/x86-release/` | x86 主程序、Hook DLL 和注入辅助程序 |
 | `out/packages/` | NSIS 安装包及 SHA-256 校验文件 |
 
 完整的构建、测试、打包和 CI 说明见 [构建、测试和打包](docs/BUILD.md)。
+首次配置会通过 vcpkg 获取并静态构建 CPR 和 nlohmann/json 及其依赖。
 
 ## 运行
 
@@ -225,7 +227,7 @@ ctest --test-dir out/build/x64-release --output-on-failure
 
 ```powershell
 .\scripts\build.ps1 -Architecture x64 -Configuration Release
-ctest --test-dir out/build/x64-release --output-on-failure
+ctest --test-dir out/build/x64-release-vcpkg --output-on-failure
 ```
 
 涉及 Hook、注入、权限或安全边界的修改，请同时更新 [用户指南](docs/USER_GUIDE.md)、[安全说明](SECURITY.md) 或 [构建说明](docs/BUILD.md) 中对应的行为描述。
