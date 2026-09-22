@@ -86,7 +86,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload x86 runtime components
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hkb-x86-runtime
           path: |
@@ -188,7 +188,7 @@ jobs:
         run: Get-ChildItem -LiteralPath build/packages -File | Select-Object Name, Length
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HotkeyBlocker-${{ github.ref_name }}
           path: build/packages/*
