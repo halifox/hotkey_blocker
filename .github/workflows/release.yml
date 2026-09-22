@@ -108,7 +108,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download x86 runtime components
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: hkb-x86-runtime
           path: build/x86-release-vcpkg
