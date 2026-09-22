@@ -69,7 +69,9 @@ jobs:
 
       - name: Run tests
         shell: pwsh
-        run: ctest --test-dir "build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure -E '^hkb_register_hotkey_injection$'
+        run: |
+          ctest --test-dir "build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure -E '^hkb_register_hotkey_injection$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check patch whitespace
         shell: pwsh

@@ -34,10 +34,16 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
             throw "Release version must use MAJOR.MINOR.PATCH, got: $version"
           }
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($version -ne $tagVersion) {
+              throw "Release version $version does not match tag version $tagVersion."
+            }
+          }
           "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
   build-x86:
-    name: Build x86 runtime components
+    name: Build and test x86
     needs: resolve-version
     runs-on: windows-latest
     env:
@@ -61,7 +67,7 @@ jobs:
           ninja --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Configure and build x86 package components
+      - name: Configure and build x86
         shell: pwsh
         run: |
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
@@ -70,7 +76,13 @@ jobs:
           $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
           cmake --preset x86-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset x86-release --target hotkey_hook hotkey_blocker_injector32 --parallel
+          cmake --build --preset x86-release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run x86 tests
+        shell: pwsh
+        run: |
+          ctest --test-dir 'build/x86-release-vcpkg' --output-on-failure -E '^hkb_register_hotkey_injection$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload x86 runtime components
@@ -83,11 +95,9 @@ jobs:
           if-no-files-found: error
 
   package-x64:
-    name: Package x64 installer
+    name: Build, test, and package x64
     needs: [resolve-version, build-x86]
     runs-on: windows-latest
-    permissions:
-      contents: write
     env:
       HKB_RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
 
@@ -107,6 +117,7 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $nsisCandidates = @(
             (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
             (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')
@@ -120,6 +131,7 @@ jobs:
           $nsisDirectory = Split-Path -Parent $nsis
           $nsisDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & $nsis /VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -136,7 +148,7 @@ jobs:
           ninja --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Configure, build, and package x64 installer
+      - name: Configure and build x64
         shell: pwsh
         run: |
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
@@ -147,6 +159,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset x64-release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run x64 tests
+        shell: pwsh
+        run: |
+          ctest --test-dir 'build/x64-release-vcpkg' --output-on-failure -E '^hkb_register_hotkey_injection$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package x64 installer
+        shell: pwsh
+        run: |
           cmake --build --preset x64-release --target package --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -172,11 +194,31 @@ jobs:
           path: build/packages/*
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package-x64
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download validated installer artifact and publish
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = Get-ChildItem -LiteralPath build/packages -File | ForEach-Object { $_.FullName }
-          gh release create $env:GITHUB_REF_NAME @assets --generate-notes --verify-tag
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" \
+            --name "HotkeyBlocker-$GITHUB_REF_NAME" \
+            --dir artifacts \
+            --repo "$GITHUB_REPOSITORY"
+          version="${GITHUB_REF_NAME#v}"
+          installer="artifacts/HotkeyBlocker-${version}-x64.exe"
+          checksum="${installer}.sha256"
+          test -f "$installer"
+          test -f "$checksum"
+          gh release create "$GITHUB_REF_NAME" "$installer" "$checksum" \
+            --generate-notes \
+            --verify-tag \
+            --repo "$GITHUB_REPOSITORY"
