@@ -58,10 +58,12 @@ add_executable(hkb WIN32
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
         src/ConfigStore.cpp
+        src/HotkeyPolicyDialog.cpp
         src/Injector.cpp
         src/InjectionOperationReaper.cpp
         src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
+        src/MainWindow.cpp
         src/PathUtils.cpp
         src/ProcessMonitor.cpp
         src/RemoteInjector.cpp
