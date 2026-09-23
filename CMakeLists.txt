@@ -55,6 +55,7 @@ configure_file(
 )
 
 add_executable(hkb WIN32
+        src/ApplicationListView.cpp
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
         src/ConfigStore.cpp

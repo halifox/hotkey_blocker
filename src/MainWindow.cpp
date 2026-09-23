@@ -3,12 +3,12 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
-#include <shobjidl.h>
 
 #include <atlbase.h>
 #include <atlapp.h>
 #include <atlwin.h>
 #include <atlctrls.h>
+#include <atlstr.h>
 #include <atlgdi.h>
 #include <atlmisc.h>
 #include <atldlgs.h>
@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "BlockerService.h"
+#include "ApplicationListView.h"
 #include "HotkeyPolicy.h"
 #include "HotkeyPolicyDialog.h"
 #include "Logger.h"
@@ -33,22 +34,12 @@
 #include "Version.h"
 #include "resource.h"
 
-extern CAppModule _Module;
-
 namespace {
 
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
 constexpr UINT kUpdateCheckCompletedMessage = WM_APP + 3;
-constexpr int kRuleStateColumn = 1;
-constexpr int kRuntimeStatusColumn = 2;
-constexpr int kConfigureActionColumn = 3;
-constexpr int kDeleteActionColumn = 4;
-constexpr int kEnabledColumnWidth = 60;
-constexpr int kStatusColumnWidth = 190;
-constexpr int kConfigureColumnWidth = 74;
-constexpr int kDeleteColumnWidth = 74;
 UINT kTaskbarCreatedMessage = 0;
 
 std::wstring HotkeyPolicySummary(const HotkeyPolicy& policy) {
@@ -68,11 +59,9 @@ std::wstring HotkeyPolicySummary(const HotkeyPolicy& policy) {
 class MainWindow final : public ATL::CDialogImpl<MainWindow>, public CMessageFilter {
 public:
     enum { IDD = IDD_MAIN_WINDOW };
-    enum { kListViewMessageMap = 1 };
 
     explicit MainWindow(bool startHidden)
         : m_startHidden(startHidden),
-          m_listView(this, kListViewMessageMap),
           m_blockerService(&m_logger) {}
 
     ~MainWindow() = default;
@@ -101,39 +90,26 @@ public:
         COMMAND_ID_HANDLER(ID_TRAY_CHECK_UPDATES, OnCheckUpdates)
         COMMAND_ID_HANDLER(ID_TRAY_SHOW, OnShowFromTray)
         COMMAND_ID_HANDLER(ID_TRAY_EXIT, OnExit)
-        NOTIFY_HANDLER(IDC_APP_LIST, NM_CUSTOMDRAW, OnListCustomDraw)
-        NOTIFY_HANDLER(IDC_APP_LIST, NM_CLICK, OnListClick)
-        NOTIFY_HANDLER(IDC_APP_LIST, LVN_ITEMCHANGED, OnListItemChanged)
-        NOTIFY_HANDLER(IDC_APP_LIST, LVN_GETINFOTIPW, OnListGetInfoTip)
+        REFLECT_NOTIFICATIONS()
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
-        ALT_MSG_MAP(kListViewMessageMap)
-        MESSAGE_HANDLER(WM_MOUSEMOVE, OnListViewMouseMoveMessage)
-        MESSAGE_HANDLER(WM_MOUSELEAVE, OnListViewMouseLeaveMessage)
-        MESSAGE_HANDLER(WM_SETCURSOR, OnListViewSetCursor)
-        MESSAGE_HANDLER(WM_VSCROLL, OnListViewUpdateHoverAfterDefault)
-        MESSAGE_HANDLER(WM_HSCROLL, OnListViewUpdateHoverAfterDefault)
-        MESSAGE_HANDLER(WM_MOUSEWHEEL, OnListViewUpdateHoverAfterDefault)
-        MESSAGE_HANDLER(WM_KEYDOWN, OnListViewUpdateHoverAfterDefault)
-        MESSAGE_HANDLER(WM_KEYUP, OnListViewUpdateHoverAfterDefault)
-        MESSAGE_HANDLER(WM_NCDESTROY, OnListViewNcDestroy)
     END_MSG_MAP()
 
 private:
-    struct DisplayRow {
-        std::wstring path;
-        bool enabled = false;
-        std::wstring status;
-        std::wstring detail;
-        int imageIndex = -1;
-    };
-
     LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
         handled = TRUE;
         const std::wstring title = L"Hotkey Blocker - " + std::wstring(hkb::version::kString);
         SetWindowText(title.c_str());
-        m_listView.SubclassWindow(GetDlgItem(IDC_APP_LIST));
-        InitializeListView();
+        m_applicationList.SubclassWindow(GetDlgItem(IDC_APP_LIST));
+        m_applicationList.SetActionHandler(
+            [this](const std::wstring& path, ApplicationListAction action) {
+                if (action == ApplicationListAction::Configure) {
+                    ConfigureApplication(path);
+                } else {
+                    DeleteApplication(path);
+                }
+            });
+        m_applicationList.Initialize();
 
         if (!LoadWindowIcons()) {
             m_logger.Error(L"加载应用图标失败");
@@ -293,231 +269,6 @@ private:
     LRESULT OnExit(WORD, WORD, HWND, BOOL& handled) {
         handled = TRUE;
         ExitApplication();
-        return 0;
-    }
-
-    LRESULT OnListCustomDraw(int, LPNMHDR notification, BOOL& handled) {
-        auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(notification);
-        const DWORD drawStage = customDraw->nmcd.dwDrawStage;
-        if (drawStage == CDDS_PREPAINT) {
-            handled = TRUE;
-            return CDRF_NOTIFYITEMDRAW;
-        }
-        if (drawStage == CDDS_ITEMPREPAINT) {
-            handled = TRUE;
-            return CDRF_NOTIFYSUBITEMDRAW;
-        }
-        if (drawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM) &&
-            (customDraw->iSubItem == kConfigureActionColumn ||
-             customDraw->iSubItem == kDeleteActionColumn)) {
-            CRect actionRect;
-            const int rowIndex = static_cast<int>(customDraw->nmcd.dwItemSpec);
-            if (GetActionHitRect(rowIndex, customDraw->iSubItem, actionRect)) {
-                const bool selected = (customDraw->nmcd.uItemState & CDIS_SELECTED) != 0;
-                const bool focusedSelection = selected && ::GetFocus() == m_listView;
-                const bool hovered = rowIndex == m_hoveredActionRow &&
-                                     customDraw->iSubItem == m_hoveredActionColumn;
-                if (focusedSelection) {
-                    customDraw->clrText = ::GetSysColor(COLOR_HIGHLIGHTTEXT);
-                } else if (customDraw->iSubItem == kConfigureActionColumn) {
-                    customDraw->clrText = ::GetSysColor(COLOR_HOTLIGHT);
-                } else {
-                    HIGHCONTRASTW highContrast{};
-                    highContrast.cbSize = sizeof(highContrast);
-                    const bool highContrastEnabled =
-                        !::SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(highContrast),
-                                                 &highContrast, 0) ||
-                        (highContrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
-                    customDraw->clrText = highContrastEnabled
-                                              ? ::GetSysColor(COLOR_WINDOWTEXT)
-                                              : RGB(180, 35, 24);
-                }
-                if (hovered && !m_actionHoverFont.IsNull()) {
-                    ::SelectObject(customDraw->nmcd.hdc, m_actionHoverFont);
-                }
-            }
-            handled = TRUE;
-            return CDRF_NEWFONT;
-        }
-        handled = TRUE;
-        return CDRF_DODEFAULT;
-    }
-
-    LRESULT OnListClick(int, LPNMHDR, BOOL& handled) {
-        int rowIndex = -1;
-        int subItemIndex = -1;
-        if (GetActionHitAtCursor(rowIndex, subItemIndex)) {
-            const std::wstring path = m_renderedRows[static_cast<std::size_t>(rowIndex)].path;
-            if (subItemIndex == kConfigureActionColumn) {
-                ConfigureApplication(path);
-            } else {
-                DeleteApplication(path);
-            }
-            handled = TRUE;
-            return 0;
-        }
-        handled = FALSE;
-        return 0;
-    }
-
-    LRESULT OnListItemChanged(int, LPNMHDR, BOOL& handled) {
-        UpdateHoveredActionFromCursor();
-        handled = FALSE;
-        return 0;
-    }
-
-    LRESULT OnListGetInfoTip(int, LPNMHDR notification, BOOL& handled) {
-        const auto* infoTip = reinterpret_cast<const NMLVGETINFOTIPW*>(notification);
-        if (infoTip->iItem >= 0 && infoTip->iItem < static_cast<int>(m_renderedRows.size()) &&
-            infoTip->pszText != nullptr && infoTip->cchTextMax > 0) {
-            const DisplayRow& row = m_renderedRows[static_cast<std::size_t>(infoTip->iItem)];
-            std::wstring tip = row.detail;
-            if (!tip.empty() && !row.path.empty()) {
-                tip += L"\n";
-            }
-            if (!row.path.empty()) {
-                tip += row.path;
-            }
-            wcsncpy_s(infoTip->pszText, infoTip->cchTextMax, tip.c_str(), _TRUNCATE);
-        }
-        handled = TRUE;
-        return 0;
-    }
-
-    bool GetActionHitRect(int rowIndex, int subItemIndex, CRect& rect) const {
-        if (rowIndex < 0 || rowIndex >= static_cast<int>(m_renderedRows.size()) ||
-            (subItemIndex != kConfigureActionColumn && subItemIndex != kDeleteActionColumn) ||
-            !m_listView.GetSubItemRect(rowIndex, subItemIndex, LVIR_BOUNDS, &rect)) {
-            return false;
-        }
-        rect.InflateRect(-4, -2);
-        return rect.right > rect.left && rect.bottom > rect.top;
-    }
-
-    bool GetActionHitAtPoint(CPoint point, int& rowIndex, int& subItemIndex) const {
-        if (!m_listView.IsWindow()) {
-            return false;
-        }
-
-        LVHITTESTINFO hit{};
-        hit.pt = point;
-        const int hitRow = m_listView.SubItemHitTest(&hit);
-        if (hitRow < 0) {
-            return false;
-        }
-
-        CRect actionRect;
-        if (!GetActionHitRect(hitRow, hit.iSubItem, actionRect) ||
-            !actionRect.PtInRect(point)) {
-            return false;
-        }
-        rowIndex = hitRow;
-        subItemIndex = hit.iSubItem;
-        return true;
-    }
-
-    bool GetActionHitAtCursor(int& rowIndex, int& subItemIndex) const {
-        if (!m_listView.IsWindow()) {
-            return false;
-        }
-
-        CPoint point;
-        if (!::GetCursorPos(&point) || !m_listView.ScreenToClient(&point)) {
-            return false;
-        }
-        return GetActionHitAtPoint(point, rowIndex, subItemIndex);
-    }
-
-    void InvalidateActionCell(int rowIndex, int subItemIndex) {
-        CRect rect;
-        if (GetActionHitRect(rowIndex, subItemIndex, rect)) {
-            m_listView.InvalidateRect(&rect, FALSE);
-        }
-    }
-
-    void SetHoveredAction(int rowIndex, int subItemIndex) {
-        if (rowIndex == m_hoveredActionRow && subItemIndex == m_hoveredActionColumn) {
-            return;
-        }
-        InvalidateActionCell(m_hoveredActionRow, m_hoveredActionColumn);
-        m_hoveredActionRow = rowIndex;
-        m_hoveredActionColumn = subItemIndex;
-        InvalidateActionCell(m_hoveredActionRow, m_hoveredActionColumn);
-    }
-
-    void UpdateHoveredActionFromCursor() {
-        CPoint point;
-        int rowIndex = -1;
-        int subItemIndex = -1;
-        if (::GetCursorPos(&point) && m_listView.ScreenToClient(&point) &&
-            GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
-            SetHoveredAction(rowIndex, subItemIndex);
-        } else {
-            SetHoveredAction(-1, -1);
-        }
-    }
-
-    void TrackListViewMouseMove(LPARAM lParam) {
-        if (!m_trackingMouseLeave) {
-            TRACKMOUSEEVENT trackMouse{};
-            trackMouse.cbSize = sizeof(trackMouse);
-            trackMouse.dwFlags = TME_LEAVE;
-            trackMouse.hwndTrack = m_listView;
-            m_trackingMouseLeave = ::TrackMouseEvent(&trackMouse) != FALSE;
-        }
-
-        const CPoint point{static_cast<SHORT>(LOWORD(lParam)),
-                           static_cast<SHORT>(HIWORD(lParam))};
-        int rowIndex = -1;
-        int subItemIndex = -1;
-        if (GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
-            SetHoveredAction(rowIndex, subItemIndex);
-        } else {
-            SetHoveredAction(-1, -1);
-        }
-    }
-
-    LRESULT OnListViewMouseMoveMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
-        TrackListViewMouseMove(lParam);
-        handled = FALSE;
-        return 0;
-    }
-
-    LRESULT OnListViewMouseLeaveMessage(UINT, WPARAM, LPARAM, BOOL& handled) {
-        m_trackingMouseLeave = false;
-        SetHoveredAction(-1, -1);
-        handled = FALSE;
-        return 0;
-    }
-
-    LRESULT OnListViewSetCursor(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
-        if (LOWORD(lParam) == HTCLIENT) {
-            CPoint point;
-            int rowIndex = -1;
-            int subItemIndex = -1;
-            if (::GetCursorPos(&point) && m_listView.ScreenToClient(&point) &&
-                GetActionHitAtPoint(point, rowIndex, subItemIndex)) {
-                ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
-                handled = TRUE;
-                return TRUE;
-            }
-        }
-        handled = FALSE;
-        return 0;
-    }
-
-    LRESULT OnListViewUpdateHoverAfterDefault(UINT message, WPARAM wParam, LPARAM lParam,
-                                               BOOL& handled) {
-        const LRESULT result = m_listView.DefWindowProc(message, wParam, lParam);
-        UpdateHoveredActionFromCursor();
-        handled = TRUE;
-        return result;
-    }
-
-    LRESULT OnListViewNcDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
-        m_trackingMouseLeave = false;
-        SetHoveredAction(-1, -1);
-        handled = FALSE;
         return 0;
     }
 
@@ -691,74 +442,11 @@ private:
         }
     }
 
-    void InitializeListView() {
-        if (!m_listView.IsWindow()) {
-            return;
-        }
-        HFONT listFont = m_listView.GetFont();
-        if (listFont == nullptr) {
-            listFont = reinterpret_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
-        }
-        LOGFONTW hoverFont{};
-        if (listFont != nullptr &&
-            ::GetObjectW(listFont, static_cast<int>(sizeof(hoverFont)), &hoverFont) ==
-                static_cast<int>(sizeof(hoverFont))) {
-            hoverFont.lfUnderline = TRUE;
-            m_actionHoverFont.CreateFontIndirect(&hoverFont);
-        }
-        // Version 5 avoids clipping when the hover state selects an alternate font.
-        m_listView.SendMessage(CCM_SETVERSION, 5, 0);
-        m_listView.SetExtendedListViewStyle(
-            LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP |
-            LVS_EX_INFOTIP);
-        SHFILEINFOW shellFileInfo{};
-        const DWORD_PTR systemImageList = SHGetFileInfoW(
-            L"C:\\Windows", FILE_ATTRIBUTE_DIRECTORY, &shellFileInfo, sizeof(shellFileInfo),
-            SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-        if (systemImageList != 0) {
-            m_systemImageList = reinterpret_cast<HIMAGELIST>(systemImageList);
-            m_listView.SetImageList(m_systemImageList, LVSIL_SMALL);
-        }
-        CRect listClientRect;
-        m_listView.GetClientRect(&listClientRect);
-        const int listWidth = listClientRect.Width();
-        const int remainingWidth = listWidth - kEnabledColumnWidth - kStatusColumnWidth -
-                                   kConfigureColumnWidth - kDeleteColumnWidth;
-        const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
-        InsertColumn(0, L"目标路径", pathColumnWidth, LVCFMT_LEFT);
-        InsertColumn(kRuleStateColumn, L"规则状态", kEnabledColumnWidth, LVCFMT_CENTER);
-        InsertColumn(kRuntimeStatusColumn, L"拦截状态", kStatusColumnWidth, LVCFMT_CENTER);
-        InsertColumn(kConfigureActionColumn, L"配置", kConfigureColumnWidth, LVCFMT_CENTER);
-        InsertColumn(kDeleteActionColumn, L"删除", kDeleteColumnWidth, LVCFMT_CENTER);
-
-        CHeaderCtrl header = m_listView.GetHeader();
-        if (header.IsWindow()) {
-            header.ModifyStyle(0, HDS_NOSIZING);
-        }
-    }
-
-    void UpdatePathColumnWidth() {
-        if (!m_listView.IsWindow()) {
-            return;
-        }
-        CRect listClientRect;
-        m_listView.GetClientRect(&listClientRect);
-        const int listWidth = listClientRect.Width();
-        const int fixedWidth = kEnabledColumnWidth + kStatusColumnWidth +
-                               kConfigureColumnWidth + kDeleteColumnWidth;
-        const int remainingWidth = listWidth - fixedWidth;
-        const int pathColumnWidth = remainingWidth > 0 ? remainingWidth : 1;
-        m_listView.SetColumnWidth(0, pathColumnWidth);
-    }
-
     bool LoadWindowIcons() {
-        const HINSTANCE resourceInstance = _Module.GetResourceInstance();
-        m_largeIcon = reinterpret_cast<HICON>(LoadImageW(
-            resourceInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON),
-            GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
-        m_smallIcon = reinterpret_cast<HICON>(LoadImageW(
-            resourceInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
-            GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+        m_largeIcon.LoadIcon(MAKEINTRESOURCEW(IDI_APP_ICON), GetSystemMetrics(SM_CXICON),
+                             GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+        m_smallIcon.LoadIcon(MAKEINTRESOURCEW(IDI_APP_ICON), GetSystemMetrics(SM_CXSMICON),
+                             GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
         if (m_largeIcon.IsNull() || m_smallIcon.IsNull()) {
             DestroyWindowIcons();
             return false;
@@ -774,62 +462,24 @@ private:
         m_smallIcon = nullptr;
     }
 
-    void InsertColumn(int index, const wchar_t* title, int width, int format) {
-        m_listView.InsertColumn(index, title, format, width, index);
-    }
-
     void RefreshListView(bool force) {
-        if (!m_listView.IsWindow()) {
+        if (!m_applicationList.IsWindow()) {
             return;
         }
-
-        const std::vector<DisplayRow> rows = BuildDisplayRows();
-        if (!force && SameRows(rows, m_renderedRows)) {
-            return;
-        }
-
-        std::wstring selectedKey;
-        const int selectedIndex = m_listView.GetNextItem(-1, LVNI_SELECTED);
-        if (selectedIndex >= 0 && selectedIndex < static_cast<int>(m_renderedRows.size())) {
-            selectedKey = m_renderedRows[static_cast<std::size_t>(selectedIndex)].path;
-        }
-
-        SetHoveredAction(-1, -1);
-        m_listView.SetRedraw(FALSE);
-        m_listView.DeleteAllItems();
-        for (std::size_t index = 0; index < rows.size(); ++index) {
-            InsertListItem(static_cast<int>(index), rows[index]);
-        }
-        m_listView.SetRedraw(TRUE);
-        m_listView.InvalidateRect(nullptr, TRUE);
-
-        if (!selectedKey.empty()) {
-            for (std::size_t index = 0; index < rows.size(); ++index) {
-                if (!PathUtils::SamePath(rows[index].path, selectedKey)) {
-                    continue;
-                }
-                m_listView.SetItemState(static_cast<int>(index), LVIS_SELECTED | LVIS_FOCUSED,
-                                        LVIS_SELECTED | LVIS_FOCUSED);
-                break;
-            }
-        }
-        m_renderedRows = rows;
-        UpdateHoveredActionFromCursor();
-        UpdatePathColumnWidth();
+        m_applicationList.SetRows(BuildDisplayRows(), force);
     }
 
-    std::vector<DisplayRow> BuildDisplayRows() const {
+    std::vector<ApplicationListRow> BuildDisplayRows() const {
         const std::vector<AppRule>& rules = m_ruleManager.Rules();
         const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
-        std::vector<DisplayRow> rows;
+        std::vector<ApplicationListRow> rows;
         rows.reserve(rules.size());
 
         for (const AppRule& rule : rules) {
-            DisplayRow row;
+            ApplicationListRow row;
             row.path = rule.path;
             row.enabled = rule.enabled;
             row.status = AppStatusText(AppStatus::Waiting);
-            row.imageIndex = FileIconIndex(rule.path);
             row.detail = HotkeyPolicySummary(rule.hotkeyPolicy);
             if (rule.kind == RuleKind::Directory) {
                 row.detail += L"；拦截文件夹内所有 EXE";
@@ -852,73 +502,15 @@ private:
         }
         return rows;
     }
-
-    static bool SameRows(const std::vector<DisplayRow>& left,
-                         const std::vector<DisplayRow>& right) {
-        if (left.size() != right.size()) {
-            return false;
-        }
-        for (std::size_t index = 0; index < left.size(); ++index) {
-            if (left[index].path != right[index].path ||
-                left[index].enabled != right[index].enabled ||
-                left[index].status != right[index].status ||
-                left[index].detail != right[index].detail ||
-                left[index].imageIndex != right[index].imageIndex) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    void InsertListItem(int itemIndex, const DisplayRow& row) {
-        m_listView.InsertItem(itemIndex, row.path.c_str(), row.imageIndex);
-        const wchar_t* enabled = row.enabled ? L"启用" : L"停用";
-        SetListItemText(itemIndex, kRuleStateColumn, enabled);
-        SetListItemText(itemIndex, kRuntimeStatusColumn, row.status.c_str());
-        SetListItemText(itemIndex, kConfigureActionColumn, L"配置");
-        SetListItemText(itemIndex, kDeleteActionColumn, L"删除");
-    }
-
-    void SetListItemText(int itemIndex, int subItemIndex, LPCTSTR text) {
-        m_listView.SetItemText(itemIndex, subItemIndex, text);
-    }
-
-    int FileIconIndex(const std::wstring& path) const {
-        const auto cached = m_iconIndices.find(path);
-        if (cached != m_iconIndices.end()) {
-            return cached->second;
-        }
-        if (m_systemImageList.IsNull() || path.empty()) {
-            return -1;
-        }
-
-        SHFILEINFOW shellFileInfo{};
-        DWORD attributes = GetFileAttributesW(path.c_str());
-        UINT flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
-        if (attributes == INVALID_FILE_ATTRIBUTES) {
-            attributes = FILE_ATTRIBUTE_NORMAL;
-            flags |= SHGFI_USEFILEATTRIBUTES;
-        }
-        if (SHGetFileInfoW(path.c_str(), attributes, &shellFileInfo, sizeof(shellFileInfo), flags) ==
-            0) {
-            m_iconIndices.emplace(path, -1);
-            return -1;
-        }
-        m_iconIndices.emplace(path, shellFileInfo.iIcon);
-        return shellFileInfo.iIcon;
-    }
-
     bool PickApplicationPath(bool folder, std::wstring& path) {
-        CComPtr<IFileOpenDialog> dialog;
-        HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
-                                           IID_PPV_ARGS(&dialog));
-        if (FAILED(result)) {
-            ShowErrorCode(L"创建文件选择器失败", result);
+        CShellFileOpenDialog dialog;
+        if (dialog.IsNull()) {
+            ShowError(L"创建文件选择器失败", L"无法创建 Windows 文件选择器。");
             return false;
         }
 
         FILEOPENDIALOGOPTIONS options = 0;
-        result = dialog->GetOptions(&options);
+        HRESULT result = dialog.GetPtr()->GetOptions(&options);
         if (FAILED(result)) {
             ShowErrorCode(L"配置文件选择器失败", result);
             return false;
@@ -926,46 +518,43 @@ private:
         options |= FOS_FORCEFILESYSTEM;
         if (folder) {
             options |= FOS_PICKFOLDERS | FOS_PATHMUSTEXIST;
-            dialog->SetTitle(L"选择要拦截的程序文件夹");
         } else {
             options |= FOS_FILEMUSTEXIST;
             const COMDLG_FILTERSPEC filters[] = {{L"应用程序 (*.exe)", L"*.exe"}};
-            result = dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
+            result = dialog.GetPtr()->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
             if (FAILED(result)) {
                 ShowErrorCode(L"配置文件选择器失败", result);
                 return false;
             }
-            dialog->SetTitle(L"选择要拦截的 EXE 文件");
         }
-        result = dialog->SetOptions(options);
+        result = dialog.GetPtr()->SetOptions(options);
         if (FAILED(result)) {
             ShowErrorCode(L"配置文件选择器失败", result);
             return false;
         }
-        result = dialog->Show(m_hWnd);
-        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
-            return false;
-        }
+        result = dialog.GetPtr()->SetTitle(folder ? L"选择要拦截的程序文件夹"
+                                                   : L"选择要拦截的 EXE 文件");
         if (FAILED(result)) {
-            ShowErrorCode(L"打开文件选择器失败", result);
+            ShowErrorCode(L"配置文件选择器失败", result);
             return false;
         }
 
-        CComPtr<IShellItem> item;
-        result = dialog->GetResult(&item);
+        const INT_PTR dialogResult = dialog.DoModal(m_hWnd);
+        if (dialogResult == IDCANCEL) {
+            return false;
+        }
+        if (dialogResult != IDOK) {
+            ShowError(L"打开文件选择器失败", L"Windows 文件选择器无法打开。");
+            return false;
+        }
+
+        ATL::CString selectedPath;
+        result = dialog.GetFilePath(selectedPath);
         if (FAILED(result)) {
             ShowErrorCode(L"获取所选文件失败", result);
             return false;
         }
-
-        PWSTR rawPath = nullptr;
-        result = item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath);
-        if (FAILED(result) || rawPath == nullptr) {
-            ShowErrorCode(L"获取所选文件路径失败", result);
-            return false;
-        }
-        path.assign(rawPath);
-        CoTaskMemFree(rawPath);
+        path.assign(selectedPath.GetString());
         return true;
     }
 
@@ -1151,14 +740,9 @@ private:
     bool m_startHidden = false;
     bool m_initializationFailed = false;
     bool m_trayIconAdded = false;
-    bool m_trackingMouseLeave = false;
-    ATL::CContainedWindowT<CListViewCtrl> m_listView;
-    CImageList m_systemImageList;  // Non-owning wrapper for the shared shell image list.
-    CFont m_actionHoverFont;
+    ApplicationListView m_applicationList;
     CIcon m_largeIcon;
     CIcon m_smallIcon;
-    int m_hoveredActionRow = -1;
-    int m_hoveredActionColumn = -1;
     UpdateChecker m_updateChecker;
     std::wstring m_pendingReleaseUrl;
     bool m_updateCheckRunning = false;
@@ -1167,8 +751,6 @@ private:
     RuleManager m_ruleManager;
     StartupManager m_startupManager;
     BlockerService m_blockerService;
-    std::vector<DisplayRow> m_renderedRows;
-    mutable std::unordered_map<std::wstring, int> m_iconIndices;
     std::unordered_map<std::wstring, AppStatus> m_notifiedActionableStates;
     std::atomic_bool m_stateNotificationPosted = false;
 };
