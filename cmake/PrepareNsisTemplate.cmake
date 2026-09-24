@@ -49,7 +49,7 @@ string(REPLACE [=[Function un.onInit
   !insertmacro MUI_HEADER_TEXT "卸载用户数据" "选择是否同时删除配置和日志"
   nsDialogs::Create 1018
   Pop $HKB_UNINSTALL_DIALOG
-  StrCmp $HKB_UNINSTALL_DIALOG error 0 +2
+  StrCmp $HKB_UNINSTALL_DIALOG error 0 +1
     Abort
   ${NSD_CreateLabel} 0 0 100% 24u "卸载会移除 Hotkey Blocker 程序。配置文件和日志默认保留。"
   Pop $0

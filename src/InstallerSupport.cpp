@@ -1,6 +1,7 @@
 #include "InstallerSupport.h"
 
 #include "Win32Support.h"
+#include "resource.h"
 
 #include <restartmanager.h>
 
@@ -14,7 +15,6 @@
 namespace InstallerSupport {
 namespace {
 
-constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\HotkeyBlocker.SingleInstance";
 constexpr wchar_t kMainWindowClassName[] = L"HotkeyBlocker.MainFrame";
 constexpr DWORD kApplicationShutdownTimeoutMs = 30000;
 constexpr DWORD kWindowDiscoveryTimeoutMs = 10000;
@@ -91,7 +91,7 @@ bool RequestRunningApplicationToExit(HANDLE& mutex) {
         return false;
     }
 
-    const BOOL posted = PostMessageW(window, kShutdownMessage, 0, 0);
+    const BOOL posted = PostMessageW(window, WM_COMMAND, MAKEWPARAM(ID_TRAY_EXIT, 0), 0);
     waitResult = WaitForSingleObject(process, kApplicationShutdownTimeoutMs);
     CloseHandle(process);
 
@@ -112,19 +112,16 @@ bool RequestRunningApplicationToExit(HANDLE& mutex) {
     return false;
 }
 
-std::vector<std::filesystem::path> GetInstalledHookDlls() {
+std::vector<std::filesystem::path> GetInstalledHookDlls(const wchar_t* installDirectory) {
     std::vector<std::filesystem::path> paths;
-    const std::filesystem::path executablePath(Win32Support::ModulePath());
-    if (executablePath.empty()) {
-        return paths;
-    }
+    const std::filesystem::path directory(installDirectory);
 
-    const std::filesystem::path installDirectory = executablePath.parent_path();
 #ifdef _WIN64
-    paths.push_back(installDirectory / L"HotkeyHook64.dll");
-    paths.push_back(installDirectory / L"win32" / L"HotkeyHook32.dll");
+    paths.push_back(directory / L"HotkeyHook64.dll");
+    paths.push_back(directory / L"win32" / L"HotkeyHook32.dll");
 #else
-    paths.push_back(installDirectory / L"HotkeyHook32.dll");
+    paths.push_back(directory / L"HotkeyHook32.dll");
+    paths.push_back(directory / L"win32" / L"HotkeyHook32.dll");
 #endif
 
     paths.erase(std::remove_if(paths.begin(), paths.end(), [](const auto& path) {
@@ -147,8 +144,13 @@ struct RestartManagerSession final {
     }
 };
 
-bool FindProcessesUsingHookDlls() {
-    const std::vector<std::filesystem::path> hookPaths = GetInstalledHookDlls();
+bool FindProcessesUsingHookDlls(const wchar_t* installDirectory) {
+    if (installDirectory == nullptr || installDirectory[0] == L'\0') {
+        ShowMessage(L"未提供有效的安装目录，本次操作已取消。");
+        return false;
+    }
+
+    const std::vector<std::filesystem::path> hookPaths = GetInstalledHookDlls(installDirectory);
     if (hookPaths.empty()) {
         return true;
     }
@@ -219,12 +221,12 @@ bool FindProcessesUsingHookDlls() {
 
 }  // namespace
 
-int PrepareForInstallerChange() {
+int PrepareForInstallerChange(const wchar_t* installDirectory) {
     HANDLE mutex = nullptr;
     if (!RequestRunningApplicationToExit(mutex)) {
         return 1;
     }
-    const int result = FindProcessesUsingHookDlls() ? 0 : 2;
+    const int result = FindProcessesUsingHookDlls(installDirectory) ? 0 : 2;
     CloseHandle(mutex);
     return result;
 }

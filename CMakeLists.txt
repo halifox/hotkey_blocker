@@ -263,16 +263,31 @@ set(CPACK_NSIS_MUI_FINISHPAGE_RUN "HotkeyBlocker.exe")
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL OFF)
 set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS [=[
-IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_preinstall_check_complete
-ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-installer-change' $0
+InitPluginsDir
+SetOutPath \"$PLUGINSDIR\"
+File /oname=HkbInstallerSupport.exe \"\${INST_DIR}\\HotkeyBlocker.exe\"
+ClearErrors
+ExecWait '\"$PLUGINSDIR\\HkbInstallerSupport.exe\" --prepare-installer-change \"$INSTDIR\"' $0
+IfErrors hkb_preinstall_helper_launch_failed
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
+SetOutPath \"$INSTDIR\"
 IntCmp $0 0 hkb_preinstall_check_complete
+Quit
+hkb_preinstall_helper_launch_failed:
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
+MessageBox MB_OK|MB_ICONSTOP \"无法启动安装前检查，安装已取消。请重新下载并运行安装包。\"
 Quit
 hkb_preinstall_check_complete:
 ]=])
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [=[
 IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_uninstall_preflight_complete
-ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-installer-change' $0
+ClearErrors
+ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-installer-change \"$INSTDIR\"' $0
+IfErrors hkb_uninstall_helper_launch_failed
 IntCmp $0 0 hkb_uninstall_preflight_complete
+Quit
+hkb_uninstall_helper_launch_failed:
+MessageBox MB_OK|MB_ICONSTOP \"无法启动卸载前检查，卸载已取消。请重新运行卸载程序。\"
 Quit
 hkb_uninstall_preflight_complete:
 DeleteRegValue HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Run\" \"HotkeyBlocker\"

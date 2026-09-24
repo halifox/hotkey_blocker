@@ -4,9 +4,9 @@
 
 namespace InstallerSupport {
 
+inline constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\HotkeyBlocker.SingleInstance";
 inline constexpr wchar_t kPrepareCommandLineArgument[] = L"--prepare-installer-change";
-inline constexpr UINT kShutdownMessage = WM_APP + 4;
 
-int PrepareForInstallerChange();
+int PrepareForInstallerChange(const wchar_t* installDirectory);
 
 }  // namespace InstallerSupport
