@@ -182,40 +182,105 @@ bool FindProcessesUsingHookDlls(const wchar_t* installDirectory) {
         return false;
     }
 
-    UINT processesNeeded = 0;
-    UINT processCount = 0;
-    DWORD rebootReasons = 0;
-    status = RmGetList(session.handle, &processesNeeded, &processCount, nullptr, &rebootReasons);
-    if (status != ERROR_SUCCESS && status != ERROR_MORE_DATA) {
-        ShowMessage(L"无法读取 Hook DLL 的占用进程，本次操作已取消。请关闭目标程序后重试。\r\n\r\n" +
-                    Win32Support::ErrorMessage(L"读取 DLL 占用进程失败", status));
+    const auto getAffectedProcesses = [&](std::vector<RM_PROCESS_INFO>& affectedProcesses,
+                                          DWORD& rebootReasons) {
+        constexpr int kMaximumListRetries = 3;
+        for (int attempt = 0; attempt < kMaximumListRetries; ++attempt) {
+            UINT processesNeeded = 0;
+            UINT processCount = 0;
+            rebootReasons = RmRebootReasonNone;
+            DWORD listStatus = RmGetList(session.handle, &processesNeeded, &processCount,
+                                         nullptr, &rebootReasons);
+            if (listStatus != ERROR_SUCCESS && listStatus != ERROR_MORE_DATA) {
+                ShowMessage(L"无法读取 Hook DLL 的占用进程，本次操作已取消。\r\n\r\n" +
+                            Win32Support::ErrorMessage(L"读取 DLL 占用进程失败", listStatus));
+                return false;
+            }
+            if (processesNeeded == 0) {
+                affectedProcesses.clear();
+                return true;
+            }
+
+            affectedProcesses.resize(processesNeeded);
+            processCount = processesNeeded;
+            listStatus = RmGetList(session.handle, &processesNeeded, &processCount,
+                                   affectedProcesses.data(), &rebootReasons);
+            if (listStatus == ERROR_MORE_DATA) {
+                continue;
+            }
+            if (listStatus != ERROR_SUCCESS) {
+                ShowMessage(L"无法完整读取 Hook DLL 的占用进程，本次操作已取消。\r\n\r\n" +
+                            Win32Support::ErrorMessage(L"读取 DLL 占用进程失败", listStatus));
+                return false;
+            }
+
+            affectedProcesses.resize(processCount);
+            return true;
+        }
+
+        ShowMessage(L"Hook DLL 的占用进程列表持续变化，本次操作已取消。请稍后重试。");
+        return false;
+    };
+
+    const auto describeAffectedProcesses = [](const std::vector<RM_PROCESS_INFO>& processes) {
+        std::wstring message = L"以下程序仍在使用 Hotkey Blocker 的 Hook DLL：\r\n";
+        for (const RM_PROCESS_INFO& process : processes) {
+            message += L"\r\n• ";
+            message += process.strAppName[0] == L'\0' ? L"未知程序" : process.strAppName;
+            message += L"（PID ";
+            message += std::to_wstring(process.Process.dwProcessId);
+            message += L"）";
+        }
+        return message;
+    };
+
+    std::vector<RM_PROCESS_INFO> affectedProcesses;
+    DWORD rebootReasons = RmRebootReasonNone;
+    if (!getAffectedProcesses(affectedProcesses, rebootReasons)) {
         return false;
     }
-    if (processesNeeded == 0) {
+    if (affectedProcesses.empty()) {
+        if (rebootReasons == RmRebootReasonNone) {
+            return true;
+        }
+        ShowMessage(
+            L"Windows 指示需要重启才能释放 Hook DLL。请重启电脑后、重新打开目标程序前再次运行安装器或卸载程序。");
+        return false;
+    }
+
+    std::wstring prompt = describeAffectedProcesses(affectedProcesses);
+    prompt += L"\r\n\r\n是否请求 Windows 正常关闭这些程序并继续？它们可能提示你保存工作。"
+              L"此操作不会强制结束进程。";
+    const int response = MessageBoxW(nullptr, prompt.c_str(), L"Hotkey Blocker 安装器",
+                                     MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+    if (response != IDYES) {
+        return false;
+    }
+
+    const DWORD shutdownStatus = RmShutdown(session.handle, 0, nullptr);
+    if (!getAffectedProcesses(affectedProcesses, rebootReasons)) {
+        return false;
+    }
+    if (affectedProcesses.empty() && shutdownStatus != ERROR_FAIL_NOACTION_REBOOT &&
+        rebootReasons == RmRebootReasonNone) {
         return true;
     }
 
-    std::vector<RM_PROCESS_INFO> affectedProcesses(processesNeeded);
-    processCount = processesNeeded;
-    status = RmGetList(session.handle, &processesNeeded, &processCount,
-                       affectedProcesses.data(), &rebootReasons);
-    if (status != ERROR_SUCCESS) {
-        ShowMessage(L"无法完整读取 Hook DLL 的占用进程，本次操作已取消。请关闭目标程序后重试。\r\n\r\n" +
-                    Win32Support::ErrorMessage(L"读取 DLL 占用进程失败", status));
-        return false;
+    std::wstring remainingMessage;
+    if (shutdownStatus == ERROR_FAIL_NOACTION_REBOOT || rebootReasons != RmRebootReasonNone) {
+        remainingMessage =
+            L"Windows 指示需要重启才能释放这些文件。请重启电脑后、重新打开目标程序前再次运行安装器或卸载程序。\r\n\r\n";
+    } else if (shutdownStatus != ERROR_SUCCESS) {
+        remainingMessage = L"Windows 未能正常关闭所有占用程序。请保存工作，手动退出剩余程序后重试。\r\n\r\n";
+    } else {
+        remainingMessage = L"部分程序仍在使用 Hook DLL。请保存工作，手动退出剩余程序后重试。\r\n\r\n";
     }
-
-    std::wstring message = L"以下程序仍在使用 Hotkey Blocker 的 Hook DLL：\r\n";
-    for (UINT index = 0; index < processCount; ++index) {
-        const RM_PROCESS_INFO& process = affectedProcesses[index];
-        message += L"\r\n• ";
-        message += process.strAppName[0] == L'\0' ? L"未知程序" : process.strAppName;
-        message += L"（PID ";
-        message += std::to_wstring(process.Process.dwProcessId);
-        message += L"）";
+    if (!affectedProcesses.empty()) {
+        remainingMessage += describeAffectedProcesses(affectedProcesses);
+    } else {
+        remainingMessage += L"Hook DLL 仍需要重启系统后才能释放。";
     }
-    message += L"\r\n\r\n请保存工作并退出这些程序，然后重新运行安装器或卸载程序。";
-    ShowMessage(message);
+    ShowMessage(remainingMessage);
     return false;
 }
 
