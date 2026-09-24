@@ -145,6 +145,18 @@ uint32_t CaptureModifiers() {
     return modifiers;
 }
 
+bool IsReservedDialogKey(UINT virtualKey) {
+    if (virtualKey == VK_TAB) {
+        return true;
+    }
+    const uint32_t modifiers = CaptureModifiers();
+    if (virtualKey == VK_RETURN || virtualKey == VK_ESCAPE) {
+        return modifiers == 0;
+    }
+    return virtualKey == VK_F4 &&
+           modifiers == HotkeyPolicyConstants::kModifierAlt;
+}
+
 }  // namespace
 
 HotkeyPolicyDialog::HotkeyPolicyDialog(HotkeyPolicy policy, bool enabled)
@@ -253,14 +265,29 @@ LRESULT HotkeyPolicyDialog::OnCancel(WORD, WORD, HWND, BOOL& handled) {
     return 0;
 }
 
-LRESULT HotkeyPolicyDialog::OnCaptureGetDlgCode(UINT, WPARAM, LPARAM, BOOL& handled) {
+LRESULT HotkeyPolicyDialog::OnCaptureGetDlgCode(UINT, WPARAM, LPARAM lParam,
+                                               BOOL& handled) {
+    const auto* message = reinterpret_cast<const MSG*>(lParam);
+    if (message != nullptr &&
+        (message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN) &&
+        IsReservedDialogKey(static_cast<UINT>(message->wParam))) {
+        // Let the dialog manager handle Tab, Enter, and Escape normally.
+        handled = FALSE;
+        return 0;
+    }
+
     handled = TRUE;
     return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
 }
 
 LRESULT HotkeyPolicyDialog::OnCaptureKeyDown(UINT, WPARAM wParam, LPARAM, BOOL& handled) {
-    handled = TRUE;
     const UINT virtualKey = static_cast<UINT>(wParam);
+    if (IsReservedDialogKey(virtualKey)) {
+        handled = FALSE;
+        return 0;
+    }
+
+    handled = TRUE;
     if (IsModifierVirtualKey(virtualKey)) {
         return 0;
     }

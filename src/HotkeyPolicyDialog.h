@@ -44,7 +44,7 @@ private:
     LRESULT OnRemove(WORD, WORD, HWND, BOOL& handled);
     LRESULT OnOk(WORD, WORD, HWND, BOOL& handled);
     LRESULT OnCancel(WORD, WORD, HWND, BOOL& handled);
-    LRESULT OnCaptureGetDlgCode(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnCaptureGetDlgCode(UINT, WPARAM, LPARAM lParam, BOOL& handled);
     LRESULT OnCaptureKeyDown(UINT, WPARAM wParam, LPARAM, BOOL& handled);
     LRESULT OnCaptureIgnoredCharacter(UINT, WPARAM, LPARAM, BOOL& handled);
 

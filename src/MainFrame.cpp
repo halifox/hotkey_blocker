@@ -22,9 +22,12 @@
 #include "HotkeyPolicyDialog.h"
 #include "Version.h"
 
-UINT g_taskbarCreatedMessage = 0;
-
 MainFrame::MainFrame(bool startHidden) noexcept : m_startHidden(startHidden) {}
+
+UINT MainFrame::TaskbarCreatedMessage() noexcept {
+    static const UINT message = ::RegisterWindowMessageW(L"TaskbarCreated");
+    return message;
+}
 
 bool MainFrame::Initialize() {
     const std::wstring title = L"Hotkey Blocker - " + std::wstring(hkb::version::kString);
@@ -39,7 +42,6 @@ bool MainFrame::Initialize() {
     if (!startup.rulesLoaded) {
         ShowError(L"加载配置失败", startup.ruleError);
         m_initializationFailed = true;
-        PostMessage(WM_CLOSE, 0, 0);
         return false;
     }
 
@@ -69,10 +71,6 @@ bool MainFrame::Initialize() {
 
 bool MainFrame::ShouldStartHidden() const noexcept {
     return m_startHidden && m_trayIcon.IsAdded();
-}
-
-bool MainFrame::InitializationFailed() const noexcept {
-    return m_initializationFailed;
 }
 
 BOOL MainFrame::PreTranslateMessage(MSG* message) {
@@ -113,7 +111,7 @@ LRESULT MainFrame::OnSetFocus(UINT, WPARAM, LPARAM, BOOL& handled) {
 }
 
 LRESULT MainFrame::OnTaskbarCreated(UINT, WPARAM, LPARAM, BOOL& handled) {
-    if (g_taskbarCreatedMessage == 0) {
+    if (TaskbarCreatedMessage() == 0) {
         handled = FALSE;
         return 0;
     }
@@ -255,7 +253,7 @@ LRESULT MainFrame::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
     m_application.Stop();
     DestroyWindowIcons();
     m_application.Log().Info(L"程序退出");
-    ::PostQuitMessage(0);
+    ::PostQuitMessage(m_initializationFailed ? 1 : 0);
     return 0;
 }
 
@@ -391,7 +389,6 @@ void MainFrame::DestroyWindowIcons() noexcept {
 }
 
 int RunMainFrame(CMessageLoop& messageLoop, bool startHidden) {
-    g_taskbarCreatedMessage = ::RegisterWindowMessageW(L"TaskbarCreated");
     MainFrame frame(startHidden);
     if (frame.CreateEx() == nullptr) {
         return 1;
@@ -399,9 +396,10 @@ int RunMainFrame(CMessageLoop& messageLoop, bool startHidden) {
 
     messageLoop.AddMessageFilter(&frame);
     frame.CenterWindow();
-    frame.Initialize();
-    if (!frame.InitializationFailed()) {
+    if (frame.Initialize()) {
         frame.ShowWindow(frame.ShouldStartHidden() ? SW_HIDE : SW_SHOWNORMAL);
+    } else if (frame.IsWindow()) {
+        frame.DestroyWindow();
     }
 
     const int exitCode = messageLoop.Run();

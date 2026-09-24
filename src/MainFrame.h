@@ -21,8 +21,6 @@
 #include "UpdateChecker.h"
 #include "resource.h"
 
-extern UINT g_taskbarCreatedMessage;
-
 class MainFrame final : public WTL::CFrameWindowImpl<MainFrame>,
                         public WTL::CUpdateUI<MainFrame>,
                         public WTL::CMessageFilter {
@@ -33,7 +31,6 @@ public:
 
     bool Initialize();
     bool ShouldStartHidden() const noexcept;
-    bool InitializationFailed() const noexcept;
     BOOL PreTranslateMessage(MSG* message) override;
 
     BEGIN_UPDATE_UI_MAP(MainFrame)
@@ -46,7 +43,7 @@ public:
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
         MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
         MESSAGE_HANDLER(kUpdateCheckCompletedMessage, OnUpdateCheckCompleted)
-        MESSAGE_HANDLER(g_taskbarCreatedMessage, OnTaskbarCreated)
+        MESSAGE_HANDLER(TaskbarCreatedMessage(), OnTaskbarCreated)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_EXECUTABLE, OnAddExecutable)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_FOLDER, OnAddFolder)
         COMMAND_ID_HANDLER(ID_MAIN_AUTOSTART, OnToggleAutoStart)
@@ -64,6 +61,7 @@ private:
     static constexpr UINT kStateChangedMessage = WM_APP + 2;
     static constexpr UINT kUpdateCheckCompletedMessage = WM_APP + 3;
 
+    static UINT TaskbarCreatedMessage() noexcept;
     LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnSetFocus(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnTrayMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled);
