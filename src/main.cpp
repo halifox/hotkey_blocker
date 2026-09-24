@@ -2,14 +2,22 @@
 
 #include <windows.h>
 
+#include <cwchar>
+
 #include <atlbase.h>
 #include <atlapp.h>
 
+#include "InstallerSupport.h"
 #include "MainFrame.h"
 
 CAppModule _Module;
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
+    if (commandLine != nullptr &&
+        std::wcscmp(commandLine, InstallerSupport::kPrepareCommandLineArgument) == 0) {
+        return InstallerSupport::PrepareForInstallerChange();
+    }
+
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(comResult)) {
         return 1;

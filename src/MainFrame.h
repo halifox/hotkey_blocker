@@ -16,6 +16,7 @@
 
 #include "ApplicationController.h"
 #include "ApplicationListPresenter.h"
+#include "InstallerSupport.h"
 #include "MainView.h"
 #include "TrayIcon.h"
 #include "UpdateChecker.h"
@@ -43,6 +44,7 @@ public:
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
         MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
         MESSAGE_HANDLER(kUpdateCheckCompletedMessage, OnUpdateCheckCompleted)
+        MESSAGE_HANDLER(InstallerSupport::kShutdownMessage, OnInstallerShutdown)
         MESSAGE_HANDLER(TaskbarCreatedMessage(), OnTaskbarCreated)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_EXECUTABLE, OnAddExecutable)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_FOLDER, OnAddFolder)
@@ -67,6 +69,7 @@ private:
     LRESULT OnTrayMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled);
     LRESULT OnStateChanged(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& handled);
+    LRESULT OnInstallerShutdown(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnTaskbarCreated(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnAddExecutable(WORD, WORD, HWND, BOOL& handled);
     LRESULT OnAddFolder(WORD, WORD, HWND, BOOL& handled);

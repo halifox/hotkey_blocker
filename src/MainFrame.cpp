@@ -180,6 +180,12 @@ LRESULT MainFrame::OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& han
     return 0;
 }
 
+LRESULT MainFrame::OnInstallerShutdown(UINT, WPARAM, LPARAM, BOOL& handled) {
+    handled = TRUE;
+    ExitApplication();
+    return 0;
+}
+
 LRESULT MainFrame::OnStateChanged(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
     for (;;) {

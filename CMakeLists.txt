@@ -64,6 +64,7 @@ add_executable(hkb WIN32
         src/HotkeyPolicyDialog.cpp
         src/Injector.cpp
         src/InjectionOperationReaper.cpp
+        src/InstallerSupport.cpp
         src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
         src/MainFrame.cpp
@@ -95,6 +96,7 @@ target_link_libraries(hkb PRIVATE
         gdi32
         nlohmann_json::nlohmann_json
         ole32
+        Rstrtmgr
         shell32
         user32
 )
@@ -259,10 +261,34 @@ set(CPACK_NSIS_PACKAGE_NAME "Hotkey Blocker")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 set(CPACK_NSIS_MUI_FINISHPAGE_RUN "HotkeyBlocker.exe")
 set(CPACK_NSIS_MODIFY_PATH OFF)
-set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-        "ExecWait '$SYSDIR\\\\taskkill.exe /F /T /IM HotkeyBlocker.exe'\nDeleteRegValue HKCU Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run HotkeyBlocker\nRMDir /r \\\"$LOCALAPPDATA\\\\HotkeyBlocker\\\"")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL OFF)
+set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS [=[
+IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_preinstall_check_complete
+ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-installer-change' $0
+IntCmp $0 0 hkb_preinstall_check_complete
+Quit
+hkb_preinstall_check_complete:
+]=])
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [=[
+IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_uninstall_preflight_complete
+ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-installer-change' $0
+IntCmp $0 0 hkb_uninstall_preflight_complete
+Quit
+hkb_uninstall_preflight_complete:
+DeleteRegValue HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Run\" \"HotkeyBlocker\"
+StrCmp $HKB_DELETE_USER_DATA \"1\" hkb_uninstall_remove_user_data hkb_uninstall_user_data_done
+hkb_uninstall_remove_user_data:
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\config.ini\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\config.ini.tmp\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log.1\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log.2\"
+RMDir \"$LOCALAPPDATA\\HotkeyBlocker\\logs\"
+RMDir \"$LOCALAPPDATA\\HotkeyBlocker\"
+hkb_uninstall_user_data_done:
+]=])
 set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hotkey_blocker/blob/master/docs/USER_GUIDE.md")
 set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hotkey_blocker")
 
+include(cmake/PrepareNsisTemplate.cmake)
 include(CPack)
