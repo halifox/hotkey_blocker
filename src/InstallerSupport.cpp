@@ -227,7 +227,8 @@ int PrepareForInstallerChange(const wchar_t* installDirectory) {
         return 1;
     }
     const int result = FindProcessesUsingHookDlls(installDirectory) ? 0 : 2;
-    CloseHandle(mutex);
+    // This short-lived helper exits immediately after this function returns. Keep the mutex
+    // handle open until process teardown so the app cannot restart in the final handoff window.
     return result;
 }
 
