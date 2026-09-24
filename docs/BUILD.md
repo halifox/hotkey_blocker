@@ -93,7 +93,7 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 
 把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `build/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
 
-安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和卸载注册信息也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会请求 Hotkey Blocker 正常退出，并检查目标进程是否仍在使用 Hook DLL；检测到占用时，可以让 Windows 请求相关程序正常退出。程序可能提示保存工作；未能释放 DLL 时，安装或卸载会取消并显示剩余进程，不会强制结束它们。
+安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和卸载注册信息也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会请求 Hotkey Blocker 正常退出，并检查目标进程是否仍在使用 Hook DLL；检测到占用时会列出进程，并提供“强制关闭并继续”操作。Windows 会先请求程序退出，未及时退出的进程将在等待超时后被强制结束，可能造成未保存数据丢失；若 DLL 仍被占用，操作会取消并显示剩余进程。
 
 从旧版全局安装迁移到当前用户安装时，需先备份配置并使用旧版卸载程序移除 `Program Files` 中的版本；之后的升级可直接覆盖安装。
 

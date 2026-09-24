@@ -3,6 +3,7 @@
 #include "Win32Support.h"
 #include "resource.h"
 
+#include <commctrl.h>
 #include <restartmanager.h>
 
 #include <algorithm>
@@ -24,6 +25,40 @@ constexpr DWORD kMutexReleaseTimeoutMs = 5000;
 void ShowMessage(const std::wstring& message, UINT flags = MB_OK | MB_ICONWARNING) {
     MessageBoxW(nullptr, message.c_str(), L"Hotkey Blocker 安装器",
                 flags | MB_SETFOREGROUND | MB_TOPMOST);
+}
+
+bool ConfirmForceCloseProcesses(const std::wstring& processList) {
+    constexpr int kForceCloseButtonId = 1001;
+    constexpr int kCancelButtonId = 1002;
+    const TASKDIALOG_BUTTON buttons[] = {
+            {kForceCloseButtonId, L"强制关闭并继续"},
+            {kCancelButtonId, L"取消"},
+    };
+
+    std::wstring content = processList;
+    content += L"\r\n\r\n强制关闭可能导致未保存的数据丢失。Windows 会先请求程序退出，"
+               L"未能及时退出的进程将在等待超时后被强制关闭。";
+
+    TASKDIALOGCONFIG config{};
+    config.cbSize = sizeof(config);
+    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+    config.pszWindowTitle = L"Hotkey Blocker 安装器";
+    config.pszMainInstruction = L"这些进程正在占用 Hook DLL";
+    config.pszContent = content.c_str();
+    config.pszMainIcon = TD_WARNING_ICON;
+    config.cButtons = static_cast<UINT>(sizeof(buttons) / sizeof(buttons[0]));
+    config.pButtons = buttons;
+    config.nDefaultButton = kCancelButtonId;
+
+    int selectedButtonId = kCancelButtonId;
+    const HRESULT result = TaskDialogIndirect(&config, &selectedButtonId, nullptr, nullptr);
+    if (SUCCEEDED(result)) {
+        return selectedButtonId == kForceCloseButtonId;
+    }
+
+    content += L"\r\n\r\n点击“是”强制关闭占用进程并继续安装或卸载。";
+    return MessageBoxW(nullptr, content.c_str(), L"Hotkey Blocker 安装器",
+                       MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST) == IDYES;
 }
 
 bool RequestRunningApplicationToExit(HANDLE& mutex) {
@@ -248,16 +283,11 @@ bool FindProcessesUsingHookDlls(const wchar_t* installDirectory) {
         return false;
     }
 
-    std::wstring prompt = describeAffectedProcesses(affectedProcesses);
-    prompt += L"\r\n\r\n是否请求 Windows 正常关闭这些程序并继续？它们可能提示你保存工作。"
-              L"此操作不会强制结束进程。";
-    const int response = MessageBoxW(nullptr, prompt.c_str(), L"Hotkey Blocker 安装器",
-                                     MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
-    if (response != IDYES) {
+    if (!ConfirmForceCloseProcesses(describeAffectedProcesses(affectedProcesses))) {
         return false;
     }
 
-    const DWORD shutdownStatus = RmShutdown(session.handle, 0, nullptr);
+    const DWORD shutdownStatus = RmShutdown(session.handle, RmForceShutdown, nullptr);
     if (!getAffectedProcesses(affectedProcesses, rebootReasons)) {
         return false;
     }
