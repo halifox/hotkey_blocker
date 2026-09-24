@@ -9,6 +9,7 @@
 #include <atlwin.h>
 #include <atlctrls.h>
 #include <atlstr.h>
+#include <atlframe.h>
 #include <atlgdi.h>
 #include <atlmisc.h>
 #include <atldlgs.h>
@@ -22,21 +23,18 @@
 #include <unordered_map>
 #include <vector>
 
-#include "BlockerService.h"
+#include "ApplicationController.h"
 #include "ApplicationListView.h"
 #include "HotkeyPolicy.h"
 #include "HotkeyPolicyDialog.h"
-#include "Logger.h"
 #include "PathUtils.h"
-#include "RuleManager.h"
-#include "StartupManager.h"
+#include "TrayIcon.h"
 #include "UpdateChecker.h"
 #include "Version.h"
 #include "resource.h"
 
 namespace {
 
-constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStateChangedMessage = WM_APP + 2;
 constexpr UINT kUpdateCheckCompletedMessage = WM_APP + 3;
@@ -56,34 +54,29 @@ std::wstring HotkeyPolicySummary(const HotkeyPolicy& policy) {
 
 }  // namespace
 
-class MainWindow final : public ATL::CDialogImpl<MainWindow>, public CMessageFilter {
+class MainWindow final : public ATL::CDialogImpl<MainWindow>,
+                         public WTL::CUpdateUI<MainWindow> {
 public:
     enum { IDD = IDD_MAIN_WINDOW };
 
-    explicit MainWindow(bool startHidden)
-        : m_startHidden(startHidden),
-          m_blockerService(&m_logger) {}
+    explicit MainWindow(bool startHidden) : m_startHidden(startHidden) {}
 
     ~MainWindow() = default;
 
     bool ShouldStartHidden() const noexcept {
-        return m_startHidden && m_trayIconAdded;
+        return m_startHidden && m_trayIcon.IsAdded();
     }
 
-    BOOL PreTranslateMessage(MSG* message) override {
-        if (message != nullptr && kTaskbarCreatedMessage != 0 &&
-            message->message == kTaskbarCreatedMessage) {
-            RestoreTrayIcon();
-            return TRUE;
-        }
-        return FALSE;
-    }
+    BEGIN_UPDATE_UI_MAP(MainWindow)
+        UPDATE_ELEMENT(ID_MAIN_AUTOSTART, UPDUI_MENUBAR)
+    END_UPDATE_UI_MAP()
 
     BEGIN_MSG_MAP(MainWindow)
         MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
         MESSAGE_HANDLER(kTrayMessage, OnTrayMessage)
         MESSAGE_HANDLER(kStateChangedMessage, OnStateChanged)
         MESSAGE_HANDLER(kUpdateCheckCompletedMessage, OnUpdateCheckCompleted)
+        MESSAGE_HANDLER(kTaskbarCreatedMessage, OnTaskbarCreated)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_EXECUTABLE, OnAddExecutable)
         COMMAND_ID_HANDLER(ID_MAIN_ADD_FOLDER, OnAddFolder)
         COMMAND_ID_HANDLER(ID_MAIN_AUTOSTART, OnToggleAutoStart)
@@ -93,6 +86,7 @@ public:
         REFLECT_NOTIFICATIONS()
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+        CHAIN_MSG_MAP(WTL::CUpdateUI<MainWindow>)
     END_MSG_MAP()
 
 private:
@@ -112,42 +106,32 @@ private:
         m_applicationList.Initialize();
 
         if (!LoadWindowIcons()) {
-            m_logger.Error(L"加载应用图标失败");
+            m_application.Log().Error(L"加载应用图标失败");
         }
 
-        m_logger.Info(L"程序启动");
-        if (!m_ruleManager.Load()) {
-            m_logger.Error(L"加载规则失败：" + m_ruleManager.LastError());
-            ShowError(L"加载配置失败", m_ruleManager.LastError());
+        const ApplicationStartupResult startup = m_application.Initialize(
+            [this] { QueueStateRefresh(); });
+        if (!startup.rulesLoaded) {
+            ShowError(L"加载配置失败", startup.ruleError);
             m_initializationFailed = true;
             PostMessage(WM_CLOSE, 0, 0);
             return TRUE;
         }
-        m_logger.Info(L"加载规则：" + std::to_wstring(m_ruleManager.Rules().size()) + L" 条");
 
-        bool autoStartEnabled = false;
-        std::wstring startupError;
-        if (!m_startupManager.GetEnabled(autoStartEnabled, startupError)) {
-            m_logger.Error(startupError);
-            ShowError(L"读取开机启动设置失败", startupError);
+        if (!startup.startupSettingLoaded) {
+            ShowError(L"读取开机启动设置失败", startup.startupSettingError);
         }
-        if (CMenuHandle menu = GetMenu(); !menu.IsNull()) {
-            menu.CheckMenuItem(ID_MAIN_AUTOSTART,
-                               MF_BYCOMMAND | (autoStartEnabled ? MF_CHECKED : MF_UNCHECKED));
-        }
+        UIAddMenuBar(m_hWnd);
+        UISetCheck(ID_MAIN_AUTOSTART, startup.autoStartEnabled, TRUE);
+        UIUpdateMenuBar(TRUE, TRUE);
 
-        m_blockerService.SetStateChangedCallback([this] { QueueStateRefresh(); });
-        const BlockerServiceStartResult serviceStart =
-            m_blockerService.Start(m_ruleManager.Rules());
-        if (!serviceStart) {
-            m_logger.Error(L"运行服务启动失败：" + serviceStart.error);
-            ShowError(L"启动运行服务失败", serviceStart.error);
+        if (!startup.blockerStart) {
+            ShowError(L"启动运行服务失败", startup.blockerStart.error);
         }
         RefreshListView(true);
 
-        m_trayIconAdded = AddTrayIcon();
-        if (!m_trayIconAdded) {
-            m_logger.Error(L"创建系统托盘图标失败，窗口将保持可见");
+        if (!m_trayIcon.Add(m_hWnd, kTrayMessage, m_smallIcon, L"Hotkey Blocker")) {
+            m_application.Log().Error(L"创建系统托盘图标失败，窗口将保持可见");
             ShowError(L"托盘初始化失败",
                       L"无法创建系统托盘图标，程序将保持窗口可见；关闭窗口将退出程序。");
         }
@@ -155,10 +139,20 @@ private:
         if (ShouldStartHidden()) {
             ShowWindow(SW_HIDE);
         }
-        if (m_trayIconAdded) {
+        if (m_trayIcon.IsAdded()) {
             StartUpdateCheck(false);
         }
         return TRUE;
+    }
+
+    LRESULT OnTaskbarCreated(UINT, WPARAM, LPARAM, BOOL& handled) {
+        if (kTaskbarCreatedMessage == 0) {
+            handled = FALSE;
+            return 0;
+        }
+        handled = TRUE;
+        RestoreTrayIcon();
+        return 0;
     }
 
     LRESULT OnTrayMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
@@ -191,7 +185,7 @@ private:
         m_updateCheckRunning = false;
 
         if (!result->error.empty()) {
-            m_logger.Error(L"检查更新失败：" + result->error);
+            m_application.Log().Error(L"检查更新失败：" + result->error);
             if (m_updateCheckInteractive) {
                 ShowError(L"检查更新失败", result->error);
             }
@@ -278,7 +272,7 @@ private:
             DestroyWindow();
             return 0;
         }
-        if (!m_trayIconAdded) {
+        if (!m_trayIcon.IsAdded()) {
             DestroyWindow();
             return 0;
         }
@@ -290,53 +284,24 @@ private:
         handled = TRUE;
         m_updateChecker.Stop();
         DrainUpdateCheckMessages();
-        m_blockerService.SetStateChangedCallback({});
-        RemoveTrayIcon();
-        m_blockerService.Stop();
+        m_application.SetStateChangedCallback({});
+        m_trayIcon.Remove();
+        m_application.Stop();
         DestroyWindowIcons();
-        m_logger.Info(L"程序退出");
+        m_application.Log().Info(L"程序退出");
         PostQuitMessage(0);
         return 0;
-    }
-
-    bool AddTrayIcon() {
-        if (m_smallIcon.IsNull()) {
-            return false;
-        }
-        NOTIFYICONDATAW data{};
-        data.cbSize = sizeof(data);
-        data.hWnd = m_hWnd;
-        data.uID = kTrayIconId;
-        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        data.uCallbackMessage = kTrayMessage;
-        data.hIcon = m_smallIcon;
-        wcscpy_s(data.szTip, L"Hotkey Blocker");
-        return Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
     }
 
     void RestoreTrayIcon() {
         if (m_hWnd == nullptr) {
             return;
         }
-        m_trayIconAdded = false;
-        m_trayIconAdded = AddTrayIcon();
-        if (!m_trayIconAdded) {
-            m_logger.Error(L"Explorer 重启后重新创建系统托盘图标失败");
+        if (!m_trayIcon.Restore()) {
+            m_application.Log().Error(L"Explorer 重启后重新创建系统托盘图标失败");
             return;
         }
         NotifyActionableStates();
-    }
-
-    void RemoveTrayIcon() {
-        if (!m_trayIconAdded) {
-            return;
-        }
-        NOTIFYICONDATAW data{};
-        data.cbSize = sizeof(data);
-        data.hWnd = m_hWnd;
-        data.uID = kTrayIconId;
-        Shell_NotifyIconW(NIM_DELETE, &data);
-        m_trayIconAdded = false;
     }
 
     void ShowFromTray() {
@@ -423,14 +388,14 @@ private:
         constexpr wchar_t kTrustedPrefix[] =
             L"https://github.com/halifox/hotkey_blocker/releases/";
         if (url.rfind(kTrustedPrefix, 0) != 0) {
-            m_logger.Error(L"拒绝打开非预期的 Release 地址：" + url);
+            m_application.Log().Error(L"拒绝打开非预期的 Release 地址：" + url);
             return;
         }
 
         const HINSTANCE result =
             ShellExecuteW(m_hWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         if (reinterpret_cast<INT_PTR>(result) <= 32) {
-            m_logger.Error(L"无法打开 Release 页面：" + url);
+            m_application.Log().Error(L"无法打开 Release 页面：" + url);
         }
     }
 
@@ -470,8 +435,8 @@ private:
     }
 
     std::vector<ApplicationListRow> BuildDisplayRows() const {
-        const std::vector<AppRule>& rules = m_ruleManager.Rules();
-        const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
+        const std::vector<AppRule>& rules = m_application.Rules();
+        const std::vector<RuntimeRuleState> states = m_application.RuntimeStates();
         std::vector<ApplicationListRow> rows;
         rows.reserve(rules.size());
 
@@ -567,11 +532,10 @@ private:
         AppRule rule;
         rule.path = std::move(path);
         rule.enabled = true;
-        if (!m_ruleManager.AddRule(std::move(rule))) {
-            ShowError(L"添加应用失败", m_ruleManager.LastError());
+        if (!m_application.AddRule(std::move(rule))) {
+            ShowError(L"添加应用失败", m_application.LastRuleError());
             return;
         }
-        m_blockerService.UpdateRules(m_ruleManager.Rules());
         RefreshListView(true);
     }
 
@@ -585,11 +549,10 @@ private:
         rule.path = std::move(path);
         rule.enabled = true;
         rule.kind = RuleKind::Directory;
-        if (!m_ruleManager.AddRule(std::move(rule))) {
-            ShowError(L"添加文件夹失败", m_ruleManager.LastError());
+        if (!m_application.AddRule(std::move(rule))) {
+            ShowError(L"添加文件夹失败", m_application.LastRuleError());
             return;
         }
-        m_blockerService.UpdateRules(m_ruleManager.Rules());
         RefreshListView(true);
     }
 
@@ -599,19 +562,18 @@ private:
             return;
         }
 
-        if (!m_ruleManager.Remove(path)) {
-            ShowError(L"删除应用失败", m_ruleManager.LastError());
+        if (!m_application.RemoveRule(path)) {
+            ShowError(L"删除应用失败", m_application.LastRuleError());
             return;
         }
-        m_blockerService.UpdateRules(m_ruleManager.Rules());
         RefreshListView(true);
     }
 
     void ConfigureApplication(const std::wstring& path) {
         const auto rule = std::find_if(
-            m_ruleManager.Rules().begin(), m_ruleManager.Rules().end(),
+            m_application.Rules().begin(), m_application.Rules().end(),
             [&path](const AppRule& candidate) { return PathUtils::SamePath(candidate.path, path); });
-        if (rule == m_ruleManager.Rules().end()) {
+        if (rule == m_application.Rules().end()) {
             ShowError(L"配置规则失败", L"找不到所选应用规则");
             return;
         }
@@ -620,32 +582,23 @@ private:
         if (dialog.DoModal(m_hWnd) != IDOK) {
             return;
         }
-        if (!m_ruleManager.SetRuleSettings(path, dialog.Enabled(), dialog.Policy())) {
-            ShowError(L"保存规则配置失败", m_ruleManager.LastError());
+        if (!m_application.SetRuleSettings(path, dialog.Enabled(), dialog.Policy())) {
+            ShowError(L"保存规则配置失败", m_application.LastRuleError());
             return;
         }
-        m_blockerService.UpdateRules(m_ruleManager.Rules());
         RefreshListView(true);
     }
 
     void UpdateAutoStart() {
-        CMenuHandle menu = GetMenu();
-        if (menu.IsNull()) {
-            return;
-        }
-        const UINT state = menu.GetMenuState(ID_MAIN_AUTOSTART, MF_BYCOMMAND);
-        if (state == static_cast<UINT>(-1)) {
-            return;
-        }
-        const bool enabled = (state & MF_CHECKED) == 0;
+        const bool enabled = !m_application.AutoStartEnabled();
         std::wstring error;
-        if (!m_startupManager.SetEnabled(enabled, error)) {
-            m_logger.Error(error);
+        if (!m_application.SetAutoStartEnabled(enabled, error)) {
+            m_application.Log().Error(error);
             ShowError(L"设置开机启动失败", error);
             return;
         }
-        menu.CheckMenuItem(ID_MAIN_AUTOSTART,
-                           MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
+        UISetCheck(ID_MAIN_AUTOSTART, enabled);
+        UIUpdateMenuBar(FALSE, TRUE);
     }
 
     static bool IsActionableStatus(AppStatus status) {
@@ -667,14 +620,14 @@ private:
     }
 
     void NotifyActionableStates() {
-        const std::vector<RuntimeRuleState> states = m_blockerService.Snapshot();
+        const std::vector<RuntimeRuleState> states = m_application.RuntimeStates();
         std::unordered_map<std::wstring, AppStatus> current;
         for (const RuntimeRuleState& state : states) {
             if (!IsActionableStatus(state.status)) {
                 continue;
             }
             current[state.path] = state.status;
-            if (!m_trayIconAdded) {
+            if (!m_trayIcon.IsAdded()) {
                 continue;
             }
 
@@ -690,11 +643,11 @@ private:
             }
             std::wstring title = L"应用状态提醒";
             const auto rule = std::find_if(
-                m_ruleManager.Rules().begin(), m_ruleManager.Rules().end(),
+                m_application.Rules().begin(), m_application.Rules().end(),
                 [&state](const AppRule& candidate) {
                     return PathUtils::SamePath(candidate.path, state.path);
                 });
-            if (rule != m_ruleManager.Rules().end() && !rule->displayName.empty()) {
+            if (rule != m_application.Rules().end() && !rule->displayName.empty()) {
                 title = rule->displayName;
             }
             ShowTrayNotification(title, message);
@@ -712,20 +665,7 @@ private:
     }
 
     void ShowTrayNotification(const std::wstring& title, const std::wstring& message) const {
-        if (!m_trayIconAdded) {
-            return;
-        }
-
-        NOTIFYICONDATAW data{};
-        data.cbSize = sizeof(data);
-        data.hWnd = m_hWnd;
-        data.uID = kTrayIconId;
-        data.uFlags = NIF_INFO;
-        data.dwInfoFlags = NIIF_WARNING;
-        data.uTimeout = 5000;
-        wcsncpy_s(data.szInfoTitle, std::size(data.szInfoTitle), title.c_str(), _TRUNCATE);
-        wcsncpy_s(data.szInfo, std::size(data.szInfo), message.c_str(), _TRUNCATE);
-        Shell_NotifyIconW(NIM_MODIFY, &data);
+        m_trayIcon.ShowNotification(title, message);
     }
 
     void ShowError(const wchar_t* title, const std::wstring& message) {
@@ -739,18 +679,15 @@ private:
 
     bool m_startHidden = false;
     bool m_initializationFailed = false;
-    bool m_trayIconAdded = false;
     ApplicationListView m_applicationList;
     CIcon m_largeIcon;
     CIcon m_smallIcon;
+    ApplicationController m_application;
+    TrayIcon m_trayIcon;
     UpdateChecker m_updateChecker;
     std::wstring m_pendingReleaseUrl;
     bool m_updateCheckRunning = false;
     bool m_updateCheckInteractive = false;
-    Logger m_logger;
-    RuleManager m_ruleManager;
-    StartupManager m_startupManager;
-    BlockerService m_blockerService;
     std::unordered_map<std::wstring, AppStatus> m_notifiedActionableStates;
     std::atomic_bool m_stateNotificationPosted = false;
 };
@@ -762,11 +699,8 @@ int RunMainWindow(CMessageLoop& messageLoop, bool startHidden) {
         return 1;
     }
 
-    messageLoop.AddMessageFilter(&window);
     window.CenterWindow();
     window.ShowWindow(window.ShouldStartHidden() ? SW_HIDE : SW_SHOWNORMAL);
 
-    const int exitCode = messageLoop.Run();
-    messageLoop.RemoveMessageFilter(&window);
-    return exitCode;
+    return messageLoop.Run();
 }
