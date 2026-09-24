@@ -3,6 +3,7 @@
 #include "ApplicationListView.h"
 
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 
@@ -12,7 +13,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include <atluser.h>
+
 #include "PathUtils.h"
+#include "resource.h"
 
 namespace {
 
@@ -118,6 +122,14 @@ void ApplicationListView::SetRows(const std::vector<ApplicationListRow>& rows, b
     m_rows = rows;
     UpdateHoveredActionFromCursor();
     UpdatePathColumnWidth();
+}
+
+std::wstring ApplicationListView::SelectedPath() const {
+    const int selectedIndex = GetNextItem(-1, LVNI_SELECTED);
+    if (selectedIndex < 0 || selectedIndex >= static_cast<int>(m_rows.size())) {
+        return {};
+    }
+    return m_rows[static_cast<std::size_t>(selectedIndex)].path;
 }
 
 LRESULT ApplicationListView::OnCustomDraw(int, LPNMHDR notification, BOOL& handled) {
@@ -242,6 +254,79 @@ LRESULT ApplicationListView::OnUpdateHoverAfterDefault(UINT message, WPARAM wPar
     UpdateHoveredActionFromCursor();
     handled = TRUE;
     return result;
+}
+
+LRESULT ApplicationListView::OnSize(UINT message, WPARAM wParam, LPARAM lParam,
+                                    BOOL& handled) {
+    const LRESULT result = DefWindowProc(message, wParam, lParam);
+    UpdatePathColumnWidth();
+    handled = TRUE;
+    return result;
+}
+
+LRESULT ApplicationListView::OnContextMenu(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
+    CPoint screenPoint{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    if (lParam == static_cast<LPARAM>(-1)) {
+        const int focusedIndex = GetNextItem(-1, LVNI_FOCUSED);
+        if (focusedIndex >= 0) {
+            CRect itemRect;
+            if (GetItemRect(focusedIndex, &itemRect, LVIR_BOUNDS)) {
+                screenPoint = CPoint(itemRect.left + 16,
+                                     itemRect.top + itemRect.Height() / 2);
+                ClientToScreen(&screenPoint);
+            }
+        } else {
+            CPoint cursor;
+            if (::GetCursorPos(&cursor)) {
+                screenPoint = cursor;
+            }
+        }
+    } else {
+        CPoint clientPoint = screenPoint;
+        ScreenToClient(&clientPoint);
+        LVHITTESTINFO hit{};
+        hit.pt = clientPoint;
+        const int hitIndex = SubItemHitTest(&hit);
+        if (hitIndex >= 0) {
+            SetItemState(-1, 0, LVIS_SELECTED);
+            SetItemState(hitIndex, LVIS_SELECTED | LVIS_FOCUSED,
+                         LVIS_SELECTED | LVIS_FOCUSED);
+            SetFocus();
+        }
+    }
+
+    const std::wstring selectedPath = SelectedPath();
+    if (selectedPath.empty()) {
+        handled = TRUE;
+        return 0;
+    }
+
+    CMenu menu;
+    if (!menu.LoadMenu(MAKEINTRESOURCEW(IDR_APP_LIST_CONTEXT_MENU))) {
+        handled = FALSE;
+        return 0;
+    }
+    CMenuHandle popup = menu.GetSubMenu(0);
+    if (popup.IsNull()) {
+        handled = TRUE;
+        return 0;
+    }
+
+    const UINT command = ::TrackPopupMenu(popup.m_hMenu,
+                                          TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                          screenPoint.x, screenPoint.y, 0,
+                                          m_hWnd, nullptr);
+    if (!m_actionHandler) {
+        handled = TRUE;
+        return 0;
+    }
+    if (command == ID_APP_LIST_CONFIGURE) {
+        m_actionHandler(selectedPath, ApplicationListAction::Configure);
+    } else if (command == ID_APP_LIST_DELETE) {
+        m_actionHandler(selectedPath, ApplicationListAction::Delete);
+    }
+    handled = TRUE;
+    return 0;
 }
 
 LRESULT ApplicationListView::OnNcDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {

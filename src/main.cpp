@@ -5,7 +5,7 @@
 #include <atlbase.h>
 #include <atlapp.h>
 
-#include "MainWindow.h"
+#include "MainFrame.h"
 
 CAppModule _Module;
 
@@ -42,7 +42,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
 
     const bool startHidden = commandLine != nullptr &&
                              wcsstr(commandLine, L"--background") != nullptr;
-    const int exitCode = RunMainWindow(messageLoop, startHidden);
+    const int exitCode = RunMainFrame(messageLoop, startHidden);
 
     _Module.RemoveMessageLoop();
     _Module.Term();

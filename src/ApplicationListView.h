@@ -37,6 +37,8 @@ public:
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
         MESSAGE_HANDLER(WM_SETCURSOR, OnSetCursor)
+        MESSAGE_HANDLER(WM_SIZE, OnSize)
+        MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
         MESSAGE_HANDLER(WM_VSCROLL, OnUpdateHoverAfterDefault)
         MESSAGE_HANDLER(WM_HSCROLL, OnUpdateHoverAfterDefault)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnUpdateHoverAfterDefault)
@@ -52,6 +54,7 @@ public:
     void Initialize();
     void SetActionHandler(ActionHandler handler);
     void SetRows(const std::vector<ApplicationListRow>& rows, bool force);
+    std::wstring SelectedPath() const;
 
 private:
     LRESULT OnCustomDraw(int, LPNMHDR notification, BOOL& handled);
@@ -61,6 +64,8 @@ private:
     LRESULT OnMouseMove(UINT, WPARAM, LPARAM lParam, BOOL& handled);
     LRESULT OnMouseLeave(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnSetCursor(UINT, WPARAM, LPARAM lParam, BOOL& handled);
+    LRESULT OnSize(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnContextMenu(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnUpdateHoverAfterDefault(UINT message, WPARAM wParam, LPARAM lParam,
                                       BOOL& handled);
     LRESULT OnNcDestroy(UINT, WPARAM, LPARAM, BOOL& handled);

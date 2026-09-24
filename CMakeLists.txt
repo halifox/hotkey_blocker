@@ -56,6 +56,7 @@ configure_file(
 
 add_executable(hkb WIN32
         src/ApplicationController.cpp
+        src/ApplicationListPresenter.cpp
         src/ApplicationListView.cpp
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
@@ -65,7 +66,9 @@ add_executable(hkb WIN32
         src/InjectionOperationReaper.cpp
         src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
-        src/MainWindow.cpp
+        src/MainFrame.cpp
+        src/MainFrameCommands.cpp
+        src/MainView.cpp
         src/PathUtils.cpp
         src/ProcessMonitor.cpp
         src/RemoteInjector.cpp

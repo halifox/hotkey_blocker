@@ -17,12 +17,12 @@ TrayIcon::~TrayIcon() {
     Remove();
 }
 
-bool TrayIcon::Add(HWND owner, UINT callbackMessage, HICON icon,
+bool TrayIcon::Add(HWND borrowedOwner, UINT callbackMessage, HICON borrowedIcon,
                    const std::wstring& tooltip) {
     Remove();
-    m_owner = owner;
+    m_borrowedOwnerWindow = borrowedOwner;
     m_callbackMessage = callbackMessage;
-    m_icon = icon;
+    m_borrowedIcon = borrowedIcon;
     m_tooltip = tooltip;
     return AddStoredIcon();
 }
@@ -33,14 +33,18 @@ bool TrayIcon::Restore() {
 }
 
 void TrayIcon::Remove() noexcept {
-    if (m_added && m_owner != nullptr) {
+    if (m_added && m_borrowedOwnerWindow != nullptr) {
         NOTIFYICONDATAW data{};
         data.cbSize = sizeof(data);
-        data.hWnd = m_owner;
+        data.hWnd = m_borrowedOwnerWindow;
         data.uID = kTrayIconId;
         Shell_NotifyIconW(NIM_DELETE, &data);
     }
     m_added = false;
+    m_borrowedOwnerWindow = nullptr;
+    m_callbackMessage = 0;
+    m_borrowedIcon = nullptr;
+    m_tooltip.clear();
 }
 
 bool TrayIcon::IsAdded() const noexcept {
@@ -55,7 +59,7 @@ bool TrayIcon::ShowNotification(const std::wstring& title,
 
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
-    data.hWnd = m_owner;
+    data.hWnd = m_borrowedOwnerWindow;
     data.uID = kTrayIconId;
     data.uFlags = NIF_INFO;
     data.dwInfoFlags = NIIF_WARNING;
@@ -66,17 +70,18 @@ bool TrayIcon::ShowNotification(const std::wstring& title,
 }
 
 bool TrayIcon::AddStoredIcon() {
-    if (m_owner == nullptr || m_icon == nullptr || m_callbackMessage == 0) {
+    if (m_borrowedOwnerWindow == nullptr || m_borrowedIcon == nullptr ||
+        m_callbackMessage == 0) {
         return false;
     }
 
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
-    data.hWnd = m_owner;
+    data.hWnd = m_borrowedOwnerWindow;
     data.uID = kTrayIconId;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = m_callbackMessage;
-    data.hIcon = m_icon;
+    data.hIcon = m_borrowedIcon;
     wcsncpy_s(data.szTip, std::size(data.szTip), m_tooltip.c_str(), _TRUNCATE);
     m_added = Shell_NotifyIconW(NIM_ADD, &data) == TRUE;
     return m_added;
