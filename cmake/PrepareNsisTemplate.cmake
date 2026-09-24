@@ -23,13 +23,27 @@ string(FIND "${_hkb_nsis_template}" [=[  !insertmacro MUI_UNPAGE_CONFIRM
   !insertmacro MUI_UNPAGE_INSTFILES]=] _hkb_uninstaller_pages_position)
 string(FIND "${_hkb_nsis_template}" [=[Function un.onInit
 ]=] _hkb_uninstaller_init_position)
+string(FIND "${_hkb_nsis_template}" [=[  InstallDir "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@"]=] _hkb_install_dir_position)
+string(FIND "${_hkb_nsis_template}" [=[  RequestExecutionLevel admin]=] _hkb_execution_level_position)
+string(FIND "${_hkb_nsis_template}" [=[    SetShellVarContext all]=] _hkb_shell_context_position)
+string(FIND "${_hkb_nsis_template}" [=[    StrCpy $INSTDIR "$DOCUMENTS\@CPACK_PACKAGE_INSTALL_DIRECTORY@"]=] _hkb_default_path_position)
 
 if (_hkb_mui_include_position LESS 0 OR
         _hkb_variables_position LESS 0 OR
         _hkb_uninstaller_pages_position LESS 0 OR
-        _hkb_uninstaller_init_position LESS 0)
-    message(FATAL_ERROR "CMake's NSIS template no longer has the anchors required for the Hotkey Blocker uninstaller page.")
+        _hkb_uninstaller_init_position LESS 0 OR
+        _hkb_install_dir_position LESS 0 OR
+        _hkb_execution_level_position LESS 0 OR
+        _hkb_shell_context_position LESS 0 OR
+        _hkb_default_path_position LESS 0)
+    message(FATAL_ERROR "CMake's NSIS template no longer has the anchors required for the Hotkey Blocker per-user installer and uninstaller page.")
 endif ()
+
+string(REPLACE [=[  RequestExecutionLevel admin]=] [=[  RequestExecutionLevel user]=] _hkb_nsis_template "${_hkb_nsis_template}")
+string(REPLACE [=[    SetShellVarContext all]=] [=[    SetShellVarContext current]=] _hkb_nsis_template "${_hkb_nsis_template}")
+string(REPLACE [=[    StrCpy $INSTDIR "$DOCUMENTS\@CPACK_PACKAGE_INSTALL_DIRECTORY@"]=] [=[    StrCpy $INSTDIR "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@"]=] _hkb_nsis_template "${_hkb_nsis_template}")
+string(REPLACE [=[  InstallDir "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@"]=] [=[  InstallDir "@CPACK_NSIS_INSTALL_ROOT@\@CPACK_PACKAGE_INSTALL_DIRECTORY@"
+  InstallDirRegKey HKCU "Software\@CPACK_PACKAGE_VENDOR@\@CPACK_PACKAGE_INSTALL_REGISTRY_KEY@" ""]=] _hkb_nsis_template "${_hkb_nsis_template}")
 
 string(REPLACE [=[  !include "MUI.nsh"]=] [=[  !include "MUI.nsh"
   !include "nsDialogs.nsh"]=] _hkb_nsis_template "${_hkb_nsis_template}")
