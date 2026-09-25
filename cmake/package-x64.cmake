@@ -1,5 +1,12 @@
-if (NOT DEFINED HKB_PROJECT_VERSION OR HKB_PROJECT_VERSION STREQUAL "")
-    set(HKB_PROJECT_VERSION "1.0.0")
+set(_hkb_version_file "${CMAKE_CURRENT_LIST_DIR}/../version.txt")
+if (NOT EXISTS "${_hkb_version_file}")
+    message(FATAL_ERROR "Missing version file: ${_hkb_version_file}")
+endif ()
+
+if (NOT DEFINED HKB_VERSION_OVERRIDE OR HKB_VERSION_OVERRIDE STREQUAL "")
+    file(STRINGS "${_hkb_version_file}" HKB_PROJECT_VERSION LIMIT_COUNT 1)
+else ()
+    set(HKB_PROJECT_VERSION "${HKB_VERSION_OVERRIDE}")
 endif ()
 
 if (NOT HKB_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
@@ -82,12 +89,16 @@ function(hkb_run_vs_build architecture driver_name)
     endif ()
 endfunction()
 
-set(_version_argument "-DHKB_PROJECT_VERSION=${HKB_PROJECT_VERSION}")
+if (DEFINED HKB_VERSION_OVERRIDE AND NOT HKB_VERSION_OVERRIDE STREQUAL "")
+    set(_version_argument "-DHKB_VERSION_OVERRIDE=${HKB_VERSION_OVERRIDE}")
+else ()
+    set(_version_argument "-U HKB_VERSION_OVERRIDE")
+endif ()
 hkb_run_vs_build(x86 "package-x64-x86.cmd"
-        "\"${CMAKE_COMMAND}\" --preset x86-release \"${_version_argument}\" ${_ninja_argument}"
+        "\"${CMAKE_COMMAND}\" --preset x86-release ${_version_argument} ${_ninja_argument}"
         "\"${CMAKE_COMMAND}\" --build --preset x86-release --target hotkey_hook hotkey_blocker_injector32 --parallel")
 hkb_run_vs_build(x64 "package-x64-x64.cmd"
-        "\"${CMAKE_COMMAND}\" --preset x64-release \"${_version_argument}\" ${_ninja_argument}"
+        "\"${CMAKE_COMMAND}\" --preset x64-release ${_version_argument} ${_ninja_argument}"
         "\"${CMAKE_COMMAND}\" --build --preset x64-release --target hkb hotkey_hook --parallel"
         "\"${CMAKE_COMMAND}\" --build --preset x64-release --target package --parallel")
 

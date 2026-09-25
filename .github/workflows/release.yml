@@ -74,7 +74,7 @@ jobs:
             throw 'The Windows runner did not provide VCPKG_INSTALLATION_ROOT.'
           }
           $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
-          cmake --preset x86-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
+          cmake --preset x86-release "-DHKB_VERSION_OVERRIDE=$env:HKB_RELEASE_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset x86-release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -155,7 +155,7 @@ jobs:
             throw 'The Windows runner did not provide VCPKG_INSTALLATION_ROOT.'
           }
           $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
-          cmake --preset x64-release "-DHKB_PROJECT_VERSION=$env:HKB_RELEASE_VERSION"
+          cmake --preset x64-release "-DHKB_VERSION_OVERRIDE=$env:HKB_RELEASE_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset x64-release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

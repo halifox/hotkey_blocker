@@ -83,15 +83,15 @@ ctest --test-dir build/x86-release-vcpkg --output-on-failure
 
 ## 完整安装包
 
-x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。下面以 `1.0.0` 为例；发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，传入去掉 `v` 的版本号。
+x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。根目录的 `version.txt` 是默认版本来源，CMake 会据此生成程序版本头文件、Windows 版本资源和安装包文件名。发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，工作流会将去掉 `v` 的版本号传给构建。
 
 从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `build/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
 
 ```powershell
-cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x64.cmake
+cmake -DVCPKG_ROOT=C:/dev/vcpkg -P cmake/package-x64.cmake
 ```
 
-把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `build/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
+把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录。命令完成后会根据 `version.txt` 生成 `build/packages/HotkeyBlocker-<版本号>-x64.exe` 和对应的 `.sha256` 校验文件。需要覆盖默认版本打包时，可传入 `-DHKB_VERSION_OVERRIDE="1.2.3"`。
 
 安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和 Windows 中的卸载项也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会检查 Hotkey Blocker 程序文件及 Hook DLL 的占用情况。安装或卸载时如检测到占用，会列出应用名和 PID，提示用户自行关闭后重新运行相应程序，并取消本次操作。安装器和卸载程序不会替用户结束进程。
 
