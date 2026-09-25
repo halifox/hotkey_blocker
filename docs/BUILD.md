@@ -93,7 +93,11 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 
 把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `build/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
 
-卸载程序会先结束正在运行的主程序，再删除 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\HotkeyBlocker`，并同步删除 `%LOCALAPPDATA%\HotkeyBlocker` 配置和日志目录，避免留下失效的开机启动项或用户数据。
+安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和卸载注册信息也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会检查 Hotkey Blocker 程序文件及 Hook DLL 的占用情况。安装或卸载时如检测到占用，会列出应用名和 PID，提示用户自行关闭后重新运行相应程序，并取消本次操作。安装器和卸载程序不会替用户结束进程。
+
+从旧版全局安装迁移到当前用户安装时，需先备份配置并使用旧版卸载程序移除 `Program Files` 中的版本；之后的升级可直接覆盖安装。
+
+卸载时会删除程序文件、快捷方式和当前用户的登录启动项。配置及日志默认保留；只有在卸载器中勾选“删除配置文件和日志”时才删除已知配置、临时配置和日志文件。
 
 安装包内包含：
 

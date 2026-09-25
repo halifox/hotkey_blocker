@@ -55,18 +55,27 @@ configure_file(
 )
 
 add_executable(hkb WIN32
+        src/ApplicationController.cpp
+        src/ApplicationListPresenter.cpp
+        src/ApplicationListView.cpp
         src/ArchitectureDetector.cpp
         src/BlockerService.cpp
         src/ConfigStore.cpp
+        src/HotkeyPolicyDialog.cpp
         src/Injector.cpp
         src/InjectionOperationReaper.cpp
+        src/InstallerSupport.cpp
         src/HotkeyPolicyTransport.cpp
         src/Logger.cpp
+        src/MainFrame.cpp
+        src/MainFrameCommands.cpp
+        src/MainView.cpp
         src/PathUtils.cpp
         src/ProcessMonitor.cpp
         src/RemoteInjector.cpp
         src/RuleManager.cpp
         src/StartupManager.cpp
+        src/TrayIcon.cpp
         src/UpdateChecker.cpp
         src/Win32Support.cpp
         src/main.cpp
@@ -87,6 +96,7 @@ target_link_libraries(hkb PRIVATE
         gdi32
         nlohmann_json::nlohmann_json
         ole32
+        Rstrtmgr
         shell32
         user32
 )
@@ -240,6 +250,7 @@ set(CPACK_PACKAGE_CONTACT "Hotkey Blocker contributors")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Hotkey Blocker")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${PROJECT_VERSION}-${HKB_ARCH_LABEL}")
+set(CPACK_NSIS_INSTALL_ROOT "$LOCALAPPDATA\\\\Programs")
 set(CPACK_PACKAGE_EXECUTABLES "HotkeyBlocker" "Hotkey Blocker")
 set(CPACK_CREATE_DESKTOP_LINKS HotkeyBlocker)
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
@@ -251,10 +262,49 @@ set(CPACK_NSIS_PACKAGE_NAME "Hotkey Blocker")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 set(CPACK_NSIS_MUI_FINISHPAGE_RUN "HotkeyBlocker.exe")
 set(CPACK_NSIS_MODIFY_PATH OFF)
-set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-        "ExecWait '$SYSDIR\\\\taskkill.exe /F /T /IM HotkeyBlocker.exe'\nDeleteRegValue HKCU Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run HotkeyBlocker\nRMDir /r \\\"$LOCALAPPDATA\\\\HotkeyBlocker\\\"")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL OFF)
+set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS [=[
+InitPluginsDir
+SetOutPath \"$PLUGINSDIR\"
+File /oname=HkbInstallerSupport.exe \"\${INST_DIR}\\HotkeyBlocker.exe\"
+ClearErrors
+ExecWait '\"$PLUGINSDIR\\HkbInstallerSupport.exe\" --prepare-installer-change \"$INSTDIR\"' $0
+IfErrors hkb_preinstall_helper_launch_failed
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
+SetOutPath \"$INSTDIR\"
+IntCmp $0 0 hkb_preinstall_check_complete
+Quit
+hkb_preinstall_helper_launch_failed:
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
+MessageBox MB_OK|MB_ICONSTOP \"无法启动安装前检查，安装已取消。请重新下载并运行安装包。\"
+Quit
+hkb_preinstall_check_complete:
+]=])
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [=[
+IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_uninstall_preflight_complete
+ClearErrors
+ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-uninstaller-change \"$INSTDIR\"' $0
+IfErrors hkb_uninstall_helper_launch_failed
+IntCmp $0 0 hkb_uninstall_preflight_complete
+Quit
+hkb_uninstall_helper_launch_failed:
+MessageBox MB_OK|MB_ICONSTOP \"无法启动卸载前检查，卸载已取消。请重新运行卸载程序。\"
+Quit
+hkb_uninstall_preflight_complete:
+DeleteRegValue HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Run\" \"HotkeyBlocker\"
+StrCmp $HKB_DELETE_USER_DATA \"1\" hkb_uninstall_remove_user_data hkb_uninstall_user_data_done
+hkb_uninstall_remove_user_data:
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\config.ini\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\config.ini.tmp\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log.1\"
+Delete \"$LOCALAPPDATA\\HotkeyBlocker\\logs\\hkb.log.2\"
+RMDir \"$LOCALAPPDATA\\HotkeyBlocker\\logs\"
+RMDir \"$LOCALAPPDATA\\HotkeyBlocker\"
+hkb_uninstall_user_data_done:
+]=])
 set(CPACK_NSIS_HELP_LINK "https://github.com/halifox/hotkey_blocker/blob/master/docs/USER_GUIDE.md")
 set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/halifox/hotkey_blocker")
 
+include(cmake/PrepareNsisTemplate.cmake)
 include(CPack)
