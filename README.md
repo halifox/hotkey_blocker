@@ -117,3 +117,4 @@
 ## 许可证
 
 Hotkey Blocker 自有代码以 [MIT License](LICENSE) 发布。WTL、Detours 等第三方依赖的许可证和版权声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
