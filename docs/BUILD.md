@@ -85,6 +85,8 @@ ctest --test-dir build/x86-release-vcpkg --output-on-failure
 
 x64 安装包需要同时包含 x64 和 x86 组件，因为 64 位主程序可能需要处理 32 位目标进程。先安装 NSIS 并确保 `makensis.exe` 在 `PATH` 中。根目录的 `version.txt` 是默认版本来源，CMake 会据此生成程序版本头文件、Windows 版本资源和安装包文件名。发布 Tag 使用 `vMAJOR.MINOR.PATCH` 格式时，工作流会将去掉 `v` 的版本号传给构建。
 
+GitHub 自动生成版本 PR、构建安装包并发布 Release 的配置与首次设置步骤见[自动发布指南](RELEASING.md)。
+
 从 Visual Studio Developer PowerShell 的仓库根目录运行下面这一条命令。它会依次构建 x86 Hook 和注入器、构建 x64 主程序和 Hook、运行 CPack，再把安装包与 SHA-256 文件放到 `build/packages/`。命令内部会分别启动 x86 和 x64 MSVC 环境，不需要手工切换终端。
 
 ```powershell
