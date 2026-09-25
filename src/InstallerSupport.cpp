@@ -2,7 +2,6 @@
 
 #include "Win32Support.h"
 
-#include <commctrl.h>
 #include <restartmanager.h>
 
 #include <algorithm>
@@ -17,8 +16,6 @@ namespace InstallerSupport {
 namespace {
 
 constexpr wchar_t kMainWindowClassName[] = L"HotkeyBlocker.MainFrame";
-constexpr int kRecheckButtonId = 1001;
-constexpr int kCancelButtonId = 1002;
 
 struct OccupyingProcess final {
     std::wstring name;
@@ -30,35 +27,16 @@ void ShowMessage(const std::wstring& message, UINT flags = MB_OK | MB_ICONWARNIN
                 flags | MB_SETFOREGROUND | MB_TOPMOST);
 }
 
-bool PromptToRecheckProcesses(const std::wstring& processList) {
-    const TASKDIALOG_BUTTON buttons[] = {
-            {kRecheckButtonId, L"重新检测"},
-            {kCancelButtonId, L"取消"},
-    };
+void NotifyOccupiedProcesses(const std::wstring& processList, ChangeOperation operation) {
+    const bool installing = operation == ChangeOperation::Install;
+    std::wstring message = processList;
+    message += L"\r\n\r\n请关闭以上应用后重新运行";
+    message += installing ? L"安装程序。安装程序不会结束这些进程，本次安装已取消。"
+                          : L"卸载程序。卸载程序不会结束这些进程，本次卸载已取消。";
 
-    std::wstring content = processList;
-    content += L"\r\n\r\n请自行关闭以上应用，然后点击“重新检测”继续。安装器不会结束这些进程。";
-
-    TASKDIALOGCONFIG config{};
-    config.cbSize = sizeof(config);
-    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-    config.pszWindowTitle = L"Hotkey Blocker 安装器";
-    config.pszMainInstruction = L"请先关闭正在使用 Hotkey Blocker 文件的应用";
-    config.pszContent = content.c_str();
-    config.pszMainIcon = TD_WARNING_ICON;
-    config.cButtons = static_cast<UINT>(sizeof(buttons) / sizeof(buttons[0]));
-    config.pButtons = buttons;
-    config.nDefaultButton = kCancelButtonId;
-
-    int selectedButtonId = kCancelButtonId;
-    const HRESULT result = TaskDialogIndirect(&config, &selectedButtonId, nullptr, nullptr);
-    if (SUCCEEDED(result)) {
-        return selectedButtonId == kRecheckButtonId;
-    }
-
-    content += L"\r\n\r\n关闭应用后，点击“是”重新检测；点击“否”取消安装或卸载。";
-    return MessageBoxW(nullptr, content.c_str(), L"Hotkey Blocker 安装器",
-                       MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST) == IDYES;
+    MessageBoxW(nullptr, message.c_str(),
+                installing ? L"Hotkey Blocker 安装器" : L"Hotkey Blocker 卸载程序",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
 }
 
 bool OpenApplicationMutex(HANDLE& mutex, bool& ownsMutex) {
@@ -138,7 +116,7 @@ struct RestartManagerSession final {
 };
 
 bool WaitForInstalledResourcesToBeReleased(const wchar_t* installDirectory, HANDLE mutex,
-                                           bool& ownsMutex) {
+                                           bool& ownsMutex, ChangeOperation operation) {
     if (installDirectory == nullptr || installDirectory[0] == L'\0') {
         ShowMessage(L"未提供有效的安装目录，本次操作已取消。");
         return false;
@@ -272,41 +250,39 @@ bool WaitForInstalledResourcesToBeReleased(const wchar_t* installDirectory, HAND
         return std::pair<std::vector<OccupyingProcess>, std::wstring>{std::move(processes), std::move(message)};
     };
 
-    for (;;) {
-        if (!RefreshApplicationMutex(mutex, ownsMutex)) {
-            return false;
-        }
-
-        std::vector<RM_PROCESS_INFO> affectedProcesses;
-        DWORD rebootReasons = RmRebootReasonNone;
-        if (!getAffectedProcesses(affectedProcesses, rebootReasons)) {
-            return false;
-        }
-
-        auto [processes, processList] = buildProcessList(affectedProcesses);
-        if (processes.empty()) {
-            if (rebootReasons == RmRebootReasonNone) {
-                return true;
-            }
-            ShowMessage(L"Windows 指示需要重启后才能释放安装文件。请重启电脑后再次运行安装器或卸载程序。");
-            return false;
-        }
-
-        if (!PromptToRecheckProcesses(processList)) {
-            return false;
-        }
+    if (!RefreshApplicationMutex(mutex, ownsMutex)) {
+        return false;
     }
+
+    std::vector<RM_PROCESS_INFO> affectedProcesses;
+    DWORD rebootReasons = RmRebootReasonNone;
+    if (!getAffectedProcesses(affectedProcesses, rebootReasons)) {
+        return false;
+    }
+
+    auto [processes, processList] = buildProcessList(affectedProcesses);
+    if (processes.empty()) {
+        if (rebootReasons == RmRebootReasonNone) {
+            return true;
+        }
+        ShowMessage(L"Windows 指示需要重启后才能释放安装文件。请重启电脑后再次运行安装器或卸载程序。");
+        return false;
+    }
+
+    NotifyOccupiedProcesses(processList, operation);
+    return false;
 }
 
 }  // namespace
 
-int PrepareForInstallerChange(const wchar_t* installDirectory) {
+int PrepareForChange(const wchar_t* installDirectory, ChangeOperation operation) {
     HANDLE mutex = nullptr;
     bool ownsMutex = false;
     if (!OpenApplicationMutex(mutex, ownsMutex)) {
         return 1;
     }
-    const int result = WaitForInstalledResourcesToBeReleased(installDirectory, mutex, ownsMutex)
+    const int result = WaitForInstalledResourcesToBeReleased(installDirectory, mutex, ownsMutex,
+                                                              operation)
                                ? 0
                                : 2;
     // This short-lived helper exits immediately after this function returns. Keep the mutex

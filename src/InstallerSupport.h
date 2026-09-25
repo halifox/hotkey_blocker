@@ -5,8 +5,14 @@
 namespace InstallerSupport {
 
 inline constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\HotkeyBlocker.SingleInstance";
-inline constexpr wchar_t kPrepareCommandLineArgument[] = L"--prepare-installer-change";
+inline constexpr wchar_t kPrepareInstallerCommandLineArgument[] = L"--prepare-installer-change";
+inline constexpr wchar_t kPrepareUninstallerCommandLineArgument[] = L"--prepare-uninstaller-change";
 
-int PrepareForInstallerChange(const wchar_t* installDirectory);
+enum class ChangeOperation {
+    Install,
+    Uninstall,
+};
+
+int PrepareForChange(const wchar_t* installDirectory, ChangeOperation operation);
 
 }  // namespace InstallerSupport

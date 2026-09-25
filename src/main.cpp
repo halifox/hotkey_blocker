@@ -16,14 +16,24 @@ CAppModule _Module;
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     if (commandLine != nullptr) {
-        const std::size_t optionLength = std::wcslen(InstallerSupport::kPrepareCommandLineArgument);
-        if (std::wcsncmp(commandLine, InstallerSupport::kPrepareCommandLineArgument,
-                          optionLength) == 0 &&
-            (commandLine[optionLength] == L'\0' || std::iswspace(commandLine[optionLength]))) {
+        const auto hasHelperArgument = [commandLine](const wchar_t* option) {
+            const std::size_t optionLength = std::wcslen(option);
+            return std::wcsncmp(commandLine, option, optionLength) == 0 &&
+                   (commandLine[optionLength] == L'\0' ||
+                    std::iswspace(commandLine[optionLength]));
+        };
+        const bool prepareInstaller =
+                hasHelperArgument(InstallerSupport::kPrepareInstallerCommandLineArgument);
+        const bool prepareUninstaller =
+                hasHelperArgument(InstallerSupport::kPrepareUninstallerCommandLineArgument);
+        if (prepareInstaller || prepareUninstaller) {
+            const wchar_t* expectedArgument =
+                    prepareInstaller ? InstallerSupport::kPrepareInstallerCommandLineArgument
+                                     : InstallerSupport::kPrepareUninstallerCommandLineArgument;
             int argumentCount = 0;
             LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
             if (arguments == nullptr || argumentCount < 3 || arguments[2][0] == L'\0' ||
-                std::wcscmp(arguments[1], InstallerSupport::kPrepareCommandLineArgument) != 0) {
+                std::wcscmp(arguments[1], expectedArgument) != 0) {
                 MessageBoxW(nullptr, L"安装器检查参数无效，本次操作已取消。", L"Hotkey Blocker 安装器",
                             MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
                 if (arguments != nullptr) {
@@ -33,7 +43,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
             }
 
             const wchar_t* installDirectory = argumentCount >= 3 ? arguments[2] : nullptr;
-            const int exitCode = InstallerSupport::PrepareForInstallerChange(installDirectory);
+            const InstallerSupport::ChangeOperation operation =
+                    prepareUninstaller ? InstallerSupport::ChangeOperation::Uninstall
+                                       : InstallerSupport::ChangeOperation::Install;
+            const int exitCode = InstallerSupport::PrepareForChange(installDirectory, operation);
             LocalFree(arguments);
             return exitCode;
         }
