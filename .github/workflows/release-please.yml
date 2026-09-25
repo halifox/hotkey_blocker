@@ -1,0 +1,71 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Create version PR or release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the release automation token
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_PLEASE_TOKEN" ]]; then
+            echo 'Configure the RELEASE_PLEASE_TOKEN repository secret before enabling release automation.'
+            exit 1
+          fi
+
+      - name: Create or update the release PR
+        id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: master
+
+      - name: Enable auto-merge for the release PR
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          pull_request_number="$(jq -r '.number' <<< "$RELEASE_PR")"
+          if [[ ! "$pull_request_number" =~ ^[0-9]+$ ]]; then
+            echo 'Release Please returned an invalid pull request number.'
+            exit 1
+          fi
+          gh pr merge "$pull_request_number" \
+            --auto \
+            --squash \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Build and publish the draft release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release Please returned an invalid tag: $RELEASE_TAG"
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_TAG" \
+            --field "version=$version"
