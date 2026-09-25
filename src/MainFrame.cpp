@@ -389,8 +389,12 @@ void MainFrame::DestroyWindowIcons() noexcept {
 }
 
 int RunMainFrame(CMessageLoop& messageLoop, bool startHidden) {
+    constexpr int kDefaultWindowWidth = 640;
+    constexpr int kDefaultWindowHeight = 420;
+
     MainFrame frame(startHidden);
-    if (frame.CreateEx() == nullptr) {
+    RECT defaultWindowRect{0, 0, kDefaultWindowWidth, kDefaultWindowHeight};
+    if (frame.CreateEx(nullptr, &defaultWindowRect) == nullptr) {
         return 1;
     }
 
