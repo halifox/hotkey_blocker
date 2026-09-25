@@ -19,7 +19,7 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "Hotkey Blocker contributors\0"
-            VALUE "FileDescription", "Block applications from registering global hotkeys\0"
+            VALUE "FileDescription", "Hotkey Blocker\0"
             VALUE "FileVersion", VER_FILEVERSION_STR
             VALUE "InternalName", "HotkeyBlocker\0"
             VALUE "LegalCopyright", "Copyright (c) Hotkey Blocker contributors\0"

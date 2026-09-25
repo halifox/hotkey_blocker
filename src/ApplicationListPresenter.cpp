@@ -37,7 +37,7 @@ std::vector<ApplicationListRow> ApplicationListPresenter::BuildRows(
         row.status = AppStatusText(AppStatus::Waiting);
         row.detail = HotkeyPolicySummary(rule.hotkeyPolicy);
         if (rule.kind == RuleKind::Directory) {
-            row.detail += L"；拦截文件夹内所有 EXE";
+            row.detail += L"；递归匹配文件夹中的 EXE";
         }
 
         const auto state = std::find_if(

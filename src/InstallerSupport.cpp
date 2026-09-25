@@ -265,7 +265,7 @@ bool WaitForInstalledResourcesToBeReleased(const wchar_t* installDirectory, HAND
         if (rebootReasons == RmRebootReasonNone) {
             return true;
         }
-        ShowMessage(L"Windows 指示需要重启后才能释放安装文件。请重启电脑后再次运行安装器或卸载程序。");
+        ShowMessage(L"需要重启电脑才能释放安装文件。请重启后再运行安装器或卸载程序。");
         return false;
     }
 
