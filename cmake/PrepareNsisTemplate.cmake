@@ -60,7 +60,7 @@ string(REPLACE [=[  !insertmacro MUI_UNPAGE_CONFIRM
 
 string(REPLACE [=[Function un.onInit
 ]=] [=[Function un.HkbUserDataPageCreate
-  !insertmacro MUI_HEADER_TEXT "卸载用户数据" "选择是否同时删除配置和日志"
+  !insertmacro MUI_HEADER_TEXT "用户数据选项" "选择是否同时删除配置和日志"
   nsDialogs::Create 1018
   Pop $HKB_UNINSTALL_DIALOG
   StrCmp $HKB_UNINSTALL_DIALOG error 0 +1

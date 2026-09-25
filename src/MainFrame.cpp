@@ -46,7 +46,7 @@ bool MainFrame::Initialize() {
     }
 
     if (!startup.startupSettingLoaded) {
-        ShowError(L"读取开机启动设置失败", startup.startupSettingError);
+        ShowError(L"读取登录时启动设置失败", startup.startupSettingError);
     }
     UIAddMenuBar(m_hWnd);
     UISetCheck(ID_MAIN_AUTOSTART, startup.autoStartEnabled, TRUE);

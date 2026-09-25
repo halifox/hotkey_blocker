@@ -48,7 +48,7 @@ bool MainFrame::PickApplicationPath(bool folder, std::wstring& path) {
     FILEOPENDIALOGOPTIONS options = 0;
     HRESULT result = dialog.GetPtr()->GetOptions(&options);
     if (FAILED(result)) {
-        ShowErrorCode(L"配置文件选择器失败", result);
+        ShowErrorCode(L"初始化文件选择器失败", result);
         return false;
     }
     options |= FOS_FORCEFILESYSTEM;
@@ -59,19 +59,19 @@ bool MainFrame::PickApplicationPath(bool folder, std::wstring& path) {
         const COMDLG_FILTERSPEC filters[] = {{L"应用程序 (*.exe)", L"*.exe"}};
         result = dialog.GetPtr()->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
         if (FAILED(result)) {
-            ShowErrorCode(L"配置文件选择器失败", result);
+            ShowErrorCode(L"初始化文件选择器失败", result);
             return false;
         }
     }
     result = dialog.GetPtr()->SetOptions(options);
     if (FAILED(result)) {
-        ShowErrorCode(L"配置文件选择器失败", result);
+        ShowErrorCode(L"初始化文件选择器失败", result);
         return false;
     }
     result = dialog.GetPtr()->SetTitle(folder ? L"选择要拦截的程序文件夹"
                                                : L"选择要拦截的 EXE 文件");
     if (FAILED(result)) {
-        ShowErrorCode(L"配置文件选择器失败", result);
+        ShowErrorCode(L"初始化文件选择器失败", result);
         return false;
     }
 
@@ -129,12 +129,12 @@ void MainFrame::AddFolderApplication() {
 
 void MainFrame::DeleteApplication(const std::wstring& path) {
     const std::wstring message = L"确定删除规则？\n\n" + path;
-    if (MessageBox(message.c_str(), L"删除应用", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+    if (MessageBox(message.c_str(), L"删除规则", MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
     }
 
     if (!m_application.RemoveRule(path)) {
-        ShowError(L"删除应用失败", m_application.LastRuleError());
+        ShowError(L"删除规则失败", m_application.LastRuleError());
         return;
     }
     RefreshListView(true);
@@ -165,7 +165,7 @@ void MainFrame::UpdateAutoStart() {
     std::wstring error;
     if (!m_application.SetAutoStartEnabled(enabled, error)) {
         m_application.Log().Error(error);
-        ShowError(L"设置开机启动失败", error);
+        ShowError(L"设置登录时启动失败", error);
         return;
     }
     UISetCheck(ID_MAIN_AUTOSTART, enabled);

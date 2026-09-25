@@ -71,7 +71,7 @@ END
 
 IDR_TRAY_MENU MENU
 BEGIN
-    POPUP "Tray"
+    POPUP "Hotkey Blocker"
     BEGIN
         MENUITEM "显示窗口", ID_TRAY_SHOW
         MENUITEM "检查更新", ID_TRAY_CHECK_UPDATES

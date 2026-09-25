@@ -10,7 +10,7 @@
 
 ## 报告问题
 
-提交 Bug 前，请搜索现有 Issue，确认问题尚未被报告。请使用 [Bug report 模板](.github/ISSUE_TEMPLATE/bug_report.md)，并提供：
+提交 Bug 前，请搜索现有 Issue，确认问题尚未被报告。请使用[问题报告模板](.github/ISSUE_TEMPLATE/bug_report.md)，并提供：
 
 - 实际行为和预期行为
 - 最小复现步骤
@@ -22,7 +22,7 @@
 
 ## 提出功能建议
 
-请使用 [Feature request 模板](.github/ISSUE_TEMPLATE/feature_request.md)，说明使用场景、期望行为、兼容性影响和已考虑的替代方案。涉及权限、注入边界、配置格式或安装包的提议，应同时说明相应的安全影响。
+请使用[功能建议模板](.github/ISSUE_TEMPLATE/feature_request.md)，说明使用场景、期望行为、兼容性影响和已考虑的替代方案。涉及权限、注入边界、配置格式或安装包的提议，应同时说明相应的安全影响。
 
 ## 准备环境
 

@@ -21,7 +21,7 @@ bool StartupManager::GetEnabled(bool& enabled, std::wstring& error) const {
         return true;
     }
     if (status != ERROR_SUCCESS) {
-        error = Win32Support::ErrorMessage(L"打开开机启动注册表项", static_cast<DWORD>(status));
+        error = Win32Support::ErrorMessage(L"打开登录时启动注册表项", static_cast<DWORD>(status));
         return false;
     }
 
@@ -32,11 +32,11 @@ bool StartupManager::GetEnabled(bool& enabled, std::wstring& error) const {
         return true;
     }
     if (query != ERROR_SUCCESS) {
-        error = Win32Support::ErrorMessage(L"读取开机启动配置", static_cast<DWORD>(query));
+        error = Win32Support::ErrorMessage(L"读取登录时启动配置", static_cast<DWORD>(query));
         return false;
     }
     if (type != REG_SZ && type != REG_EXPAND_SZ) {
-        error = L"开机启动配置类型无效";
+        error = L"登录时启动配置类型无效";
         return false;
     }
     enabled = true;
@@ -56,7 +56,7 @@ bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
         if (!enabled && status == ERROR_FILE_NOT_FOUND) {
             return true;
         }
-        error = Win32Support::ErrorMessage(L"打开开机启动注册表项", static_cast<DWORD>(status));
+        error = Win32Support::ErrorMessage(L"打开登录时启动注册表项", static_cast<DWORD>(status));
         return false;
     }
 
@@ -81,7 +81,7 @@ bool StartupManager::SetEnabled(bool enabled, std::wstring& error) const {
 
     RegCloseKey(key);
     if (status != ERROR_SUCCESS) {
-        error = Win32Support::ErrorMessage(enabled ? L"写入开机启动配置" : L"删除开机启动配置",
+        error = Win32Support::ErrorMessage(enabled ? L"写入登录时启动配置" : L"删除登录时启动配置",
                                             static_cast<DWORD>(status));
         return false;
     }

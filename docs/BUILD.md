@@ -66,7 +66,7 @@ x86 构建需要在 x86 Developer PowerShell 中使用 `x86-release` 或 `x86-de
 - `build/x86-release-vcpkg/`：x86 主程序、Hook DLL 和注入辅助程序
 - `build/packages/`：最终安装包和 SHA-256 校验文件
 
-上述当前构建目录均被 `.gitignore` 忽略，不应提交到源码仓库。已有的旧 `out/` 目录会继续被忽略并保留；新构建不再写入该目录。
+上述当前构建目录均被 `.gitignore` 忽略，不应提交到源码仓库。
 
 ## 运行库与测试
 
@@ -93,7 +93,7 @@ cmake -DVCPKG_ROOT=C:/dev/vcpkg -DHKB_PROJECT_VERSION="1.0.0" -P cmake/package-x
 
 把 `C:/dev/vcpkg` 换成本机 vcpkg 根目录，并按需修改版本号。命令完成后会生成 `build/packages/HotkeyBlocker-1.0.0-x64.exe` 和对应的 `.sha256` 校验文件。
 
-安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和卸载注册信息也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会检查 Hotkey Blocker 程序文件及 Hook DLL 的占用情况。安装或卸载时如检测到占用，会列出应用名和 PID，提示用户自行关闭后重新运行相应程序，并取消本次操作。安装器和卸载程序不会替用户结束进程。
+安装器只为当前 Windows 用户安装，不请求管理员权限，默认目录为 `%LOCALAPPDATA%\Programs\Hotkey Blocker`；开始菜单快捷方式和 Windows 中的卸载项也只对当前用户生效。升级会在原安装目录覆盖文件，不会先运行旧版卸载程序，也不会删除用户配置。安装器和卸载程序会检查 Hotkey Blocker 程序文件及 Hook DLL 的占用情况。安装或卸载时如检测到占用，会列出应用名和 PID，提示用户自行关闭后重新运行相应程序，并取消本次操作。安装器和卸载程序不会替用户结束进程。
 
 从旧版全局安装迁移到当前用户安装时，需先备份配置并使用旧版卸载程序移除 `Program Files` 中的版本；之后的升级可直接覆盖安装。
 
