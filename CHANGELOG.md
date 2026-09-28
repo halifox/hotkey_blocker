@@ -1,5 +1,13 @@
 # 变更记录
 
+## [1.2.0](https://github.com/halifox/hotkey_blocker/compare/v1.1.2...v1.2.0) (2026-09-28)
+
+
+### Features
+
+* **ui:** move list actions to bottom buttons ([21144f7](https://github.com/halifox/hotkey_blocker/commit/21144f7bb0801a6acbe2c9c89bb9aa26ac585ad7))
+* **ui:** move list actions to bottom buttons ([869380c](https://github.com/halifox/hotkey_blocker/commit/869380cbe7ab8aaff4de80492ae8c25726a8eb4f))
+
 ## [1.1.2](https://github.com/halifox/hotkey_blocker/compare/v1.1.1...v1.1.2) (2026-09-28)
 
 
