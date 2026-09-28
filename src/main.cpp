@@ -63,6 +63,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         return static_cast<int>(result);
     }
 
+    // Create the event before acquiring the mutex so a second launch can queue
+    // activation even before the first process has created its window.
+    CHandle activationEvent(CreateEventW(nullptr, FALSE, FALSE,
+                                         InstallerSupport::kActivationEventName));
+    if (activationEvent == nullptr) {
+        _Module.Term();
+        CoUninitialize();
+        return 1;
+    }
     HANDLE rawInstanceMutex =
         CreateMutexW(nullptr, TRUE, InstallerSupport::kSingleInstanceMutexName);
     if (rawInstanceMutex == nullptr) {
@@ -73,6 +82,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     const DWORD mutexStatus = GetLastError();
     CHandle instanceMutex(rawInstanceMutex);
     if (mutexStatus == ERROR_ALREADY_EXISTS) {
+        if (commandLine == nullptr || wcsstr(commandLine, L"--background") == nullptr) {
+            const HWND existing = FindWindowW(L"HotkeyBlocker.MainFrame", nullptr);
+            DWORD processId = 0;
+            if (existing != nullptr && GetWindowThreadProcessId(existing, &processId)) {
+                AllowSetForegroundWindow(processId);
+            }
+            SetEvent(activationEvent);
+        }
         _Module.Term();
         CoUninitialize();
         return 0;
@@ -84,7 +101,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
 
     const bool startHidden = commandLine != nullptr &&
                              wcsstr(commandLine, L"--background") != nullptr;
-    const int exitCode = RunMainFrame(messageLoop, startHidden);
+    const int exitCode = RunMainFrame(messageLoop, startHidden, activationEvent);
 
     _Module.RemoveMessageLoop();
     _Module.Term();
