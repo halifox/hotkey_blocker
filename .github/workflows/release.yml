@@ -93,6 +93,7 @@ jobs:
             build/x86-release-vcpkg/HotkeyBlockerInjector32.exe
             build/x86-release-vcpkg/hotkey_probe.exe
           if-no-files-found: error
+          retention-days: 1
 
   package-x64:
     name: Build, test, and package x64
@@ -194,6 +195,7 @@ jobs:
           name: HotkeyBlocker-${{ github.ref_name }}
           path: build/packages/*
           if-no-files-found: error
+          retention-days: 1
 
   publish-release:
     name: Publish GitHub Release

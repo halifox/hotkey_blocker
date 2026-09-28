@@ -87,6 +87,7 @@ jobs:
             build/${{ matrix.architecture }}-release-vcpkg/hkb_injection_test.exe
             build/${{ matrix.architecture }}-release-vcpkg/hkb_blocker_service_integration_test.exe
           if-no-files-found: error
+          retention-days: 1
 
   cross-architecture:
     name: Test x64 to x86 injection
