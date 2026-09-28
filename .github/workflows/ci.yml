@@ -69,9 +69,44 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: |
-          ctest --test-dir "build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure -E '^hkb_register_hotkey_injection$'
+          ctest --test-dir "build/${{ matrix.architecture }}-release-vcpkg" --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check patch whitespace
         shell: pwsh
         run: git diff --check
+
+      - name: Upload tested injection components
+        uses: actions/upload-artifact@v4
+        with:
+          name: injection-${{ matrix.architecture }}
+          path: |
+            build/${{ matrix.architecture }}-release-vcpkg/HotkeyHook*.dll
+            build/${{ matrix.architecture }}-release-vcpkg/HotkeyBlockerInjector32.exe
+            build/${{ matrix.architecture }}-release-vcpkg/hotkey_probe.exe
+            build/${{ matrix.architecture }}-release-vcpkg/hkb_injection_test.exe
+            build/${{ matrix.architecture }}-release-vcpkg/hkb_blocker_service_integration_test.exe
+          if-no-files-found: error
+
+  cross-architecture:
+    name: Test x64 to x86 injection
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download x64 test runner
+        uses: actions/download-artifact@v8
+        with:
+          name: injection-x64
+          path: runtime
+      - name: Download x86 targets
+        uses: actions/download-artifact@v8
+        with:
+          name: injection-x86
+          path: runtime/win32
+      - name: Verify helper injection and service lifecycle
+        shell: pwsh
+        run: |
+          & ./runtime/hkb_injection_test.exe --win32
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./runtime/hkb_blocker_service_integration_test.exe --win32
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

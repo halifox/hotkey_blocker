@@ -19,7 +19,7 @@ bool TryRegister(UINT modifiers, UINT virtualKey, int identifier) {
 
 bool WriteResult(const std::wstring& path, bool baselineSucceeded, bool blocked,
                  bool baselineAllowed, bool afterAllowed, bool baselineSelected,
-                 bool afterSelected) {
+                 bool afterSelected, bool earlySurvived) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
@@ -32,7 +32,8 @@ bool WriteResult(const std::wstring& path, bool baselineSucceeded, bool blocked,
         "\nbaseline_allowed=" + std::to_string(baselineAllowed ? 1 : 0) +
         "\nafter_allowed=" + std::to_string(afterAllowed ? 1 : 0) +
         "\nbaseline_selected=" + std::to_string(baselineSelected ? 1 : 0) +
-        "\nafter_selected=" + std::to_string(afterSelected ? 1 : 0) + "\n";
+        "\nafter_selected=" + std::to_string(afterSelected ? 1 : 0) +
+        "\nearly_survived=" + std::to_string(earlySurvived ? 1 : 0) + "\n";
     DWORD written = 0;
     const bool success = WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written,
                                    nullptr) &&
@@ -64,6 +65,9 @@ int wmain(int argc, wchar_t* argv[]) {
         return 3;
     }
 
+    // Register immediately at startup and keep ownership across hook installation.
+    const bool earlyRegistered = RegisterHotKey(nullptr, 200,
+        MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT, VK_F19) == TRUE;
     const bool baselineAllowed = TryRegister(MOD_NOREPEAT, VK_F24, kAllowedHotKeyId);
     const bool baselineSelected =
         TryRegister(MOD_NOREPEAT | MOD_CONTROL | MOD_ALT, VK_F24, kSelectedHotKeyId);
@@ -91,14 +95,15 @@ int wmain(int argc, wchar_t* argv[]) {
     const bool afterAllowed = TryRegister(MOD_NOREPEAT, VK_F24, kAllowedHotKeyId);
     const bool afterSelected =
         TryRegister(MOD_NOREPEAT | MOD_CONTROL | MOD_ALT, VK_F24, kSelectedHotKeyId);
+    const bool earlySurvived = UnregisterHotKey(nullptr, 200) == TRUE;
 
     const bool baselineSucceeded = baselineAllowed && baselineSelected;
     const bool blocked = blacklistMode ? !afterSelected : !afterAllowed && !afterSelected;
     const bool expectedAfter = blacklistMode ? afterAllowed && !afterSelected
                                              : !afterAllowed && !afterSelected;
     const bool success = WriteResult(argv[3], baselineSucceeded, blocked, baselineAllowed,
-                                     afterAllowed, baselineSelected, afterSelected) &&
-                         baselineSucceeded && expectedAfter;
+                                     afterAllowed, baselineSelected, afterSelected, earlySurvived) &&
+                         baselineSucceeded && expectedAfter && earlyRegistered && earlySurvived;
     CloseHandle(ready);
     CloseHandle(release);
     return success ? 0 : 5;
