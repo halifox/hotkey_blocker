@@ -10,8 +10,6 @@
 
 namespace {
 
-constexpr DWORD kInjectionTimeoutMs = 10000;
-
 class RemoteThreadOperation final : public InjectionOperation {
 public:
     explicit RemoteThreadOperation(std::wstring dllPath, ULONG_PTR initializerOffset)
@@ -153,8 +151,7 @@ std::wstring FullPath(const std::wstring& path) {
 
 }  // namespace
 
-RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, const std::wstring& dllPath,
-                                           bool waitForCompletion) {
+RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, const std::wstring& dllPath) {
     RemoteInjectionResult result;
     if (identity.pid == 0 || identity.creationTime == 0) {
         result.error = L"目标进程标识无效";
@@ -252,31 +249,7 @@ RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, cons
     }
     operation->Attach(process, remoteThread, remotePath);
 
-    const DWORD waitResult = WaitForSingleObject(
-        remoteThread, waitForCompletion ? INFINITE : kInjectionTimeoutMs);
-    if (waitResult != WAIT_OBJECT_0) {
-        result.status = InjectionStatus::Pending;
-        result.error = waitResult == WAIT_TIMEOUT
-                           ? L"等待远程 DLL 加载超时"
-                           : Win32Support::ErrorMessage(L"等待远程线程失败");
-        result.pendingOperation = std::move(operation);
-        return result;
-    }
-
-    const ULONGLONG started = GetTickCount64();
-    for (;;) {
-        InjectionCompletion completion;
-        if (operation->TryComplete(completion)) {
-            result.status = completion.status;
-            result.error = std::move(completion.error);
-            break;
-        }
-        if (!waitForCompletion && GetTickCount64() - started >= kInjectionTimeoutMs) {
-            result.status = InjectionStatus::Pending;
-            result.pendingOperation = std::move(operation);
-            break;
-        }
-        Sleep(10);
-    }
+    result.status = InjectionStatus::Pending;
+    result.pendingOperation = std::move(operation);
     return result;
 }

@@ -179,6 +179,7 @@ if (HKB_BUILD_TESTS)
     add_executable(hotkey_probe tests/HotkeyProbe.cpp)
     hkb_configure_target(hotkey_probe)
     target_link_libraries(hotkey_probe PRIVATE user32)
+    add_dependencies(hkb_injection_identity_test hotkey_probe)
 
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_executable(hkb_injection_test

@@ -122,6 +122,7 @@ LRESULT MainFrame::OnTaskbarCreated(UINT, WPARAM, LPARAM, BOOL& handled) {
 
 LRESULT MainFrame::OnTrayMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     switch (LOWORD(lParam)) {
         case WM_LBUTTONUP:
         case WM_LBUTTONDBLCLK:
@@ -145,6 +146,7 @@ LRESULT MainFrame::OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& han
     if (!result) {
         return 0;
     }
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
 
     m_updateCheckRunning = false;
     if (!result->error.empty()) {
@@ -182,6 +184,7 @@ LRESULT MainFrame::OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& han
 
 LRESULT MainFrame::OnStateChanged(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     for (;;) {
         m_stateNotificationPosted.store(false, std::memory_order_release);
         RefreshListView(false);
@@ -231,8 +234,9 @@ LRESULT MainFrame::OnExit(WORD, WORD, HWND, BOOL& handled) {
 
 LRESULT MainFrame::OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     if (m_initializationFailed || !m_trayIcon.IsAdded()) {
-        DestroyWindow();
+        ExitApplication();
         return 0;
     }
     ShowWindow(SW_HIDE);
@@ -241,9 +245,13 @@ LRESULT MainFrame::OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
 
 LRESULT MainFrame::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
-    if (m_shuttingDown.exchange(true, std::memory_order_acq_rel)) {
+    if (m_destroyed) {
         return 0;
     }
+    m_destroyed = true;
+    m_shuttingDown.store(true, std::memory_order_release);
+    KillTimer(kShutdownTimer);
+    if (m_shutdownThread.joinable()) m_shutdownThread.join();
 
     m_updateChecker.Stop();
     DrainUpdateCheckMessages();
@@ -304,10 +312,34 @@ void MainFrame::ShowTrayMenu() {
 }
 
 void MainFrame::ExitApplication() {
-    DestroyWindow();
+    if (m_shuttingDown.exchange(true, std::memory_order_acq_rel)) return;
+    m_application.SetStateChangedCallback({});
+    m_updateChecker.RequestStop();
+    EnableWindow(FALSE);
+    if (SetTimer(kShutdownTimer, 50) == 0) {
+        DestroyWindow();
+        return;
+    }
+    try {
+        m_shutdownThread = std::thread([this] {
+            m_updateChecker.Stop();
+            m_application.Stop();
+            m_shutdownComplete.store(true, std::memory_order_release);
+        });
+    } catch (...) {
+        KillTimer(kShutdownTimer);
+        DestroyWindow();
+    }
+}
+
+LRESULT MainFrame::OnTimer(UINT, WPARAM timer, LPARAM, BOOL& handled) {
+    handled = timer == kShutdownTimer;
+    if (handled && m_shutdownComplete.load(std::memory_order_acquire)) DestroyWindow();
+    return 0;
 }
 
 void MainFrame::StartUpdateCheck(bool interactive) {
+    if (m_shuttingDown.load(std::memory_order_acquire)) return;
     if (m_updateCheckRunning) {
         if (interactive) {
             MessageBox(L"版本检查正在进行，请稍候。", L"检查更新",

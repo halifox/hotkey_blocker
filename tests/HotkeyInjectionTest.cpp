@@ -129,7 +129,18 @@ int wmain(int argc, wchar_t* argv[]) {
         const Injector injector(directory);
         ProcessIdentity identity;
         QueryProcessIdentity(processInfo.hProcess, identity);
-        const InjectionResult injection = injector.Inject(identity);
+        InjectionResult injection = injector.Inject(identity);
+        const ULONGLONG deadline = GetTickCount64() + 10000;
+        while (injection.pendingOperation && GetTickCount64() < deadline) {
+            InjectionCompletion completion;
+            if (injection.pendingOperation->TryComplete(completion)) {
+                injection.status = completion.status;
+                injection.error = completion.error;
+                injection.pendingOperation.reset();
+            } else {
+                Sleep(10);
+            }
+        }
         if (injection.IsSuccess()) {
             SetEvent(release);
             if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {

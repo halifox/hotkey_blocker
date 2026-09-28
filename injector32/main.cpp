@@ -43,7 +43,7 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     RemoteInjectionResult result = InjectDllIntoProcess(
-        {static_cast<DWORD>(pid), creationTime}, argv[3], true);
+        {static_cast<DWORD>(pid), creationTime}, argv[3]);
     while (result.status == InjectionStatus::Pending && result.pendingOperation != nullptr) {
         InjectionCompletion completion;
         if (result.pendingOperation->TryComplete(completion)) {

@@ -25,9 +25,10 @@ public:
 
     bool Start(CompletionCallback callback);
     void Stop();
+    void RequestStop() noexcept;
 
 private:
-    static UpdateCheckResult CheckLatestRelease();
+    UpdateCheckResult CheckLatestRelease();
 
     std::atomic_bool m_stopRequested = false;
     std::thread m_thread;

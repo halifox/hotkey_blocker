@@ -11,8 +11,6 @@
 
 namespace {
 
-constexpr DWORD kHelperTimeoutMs = 15000;
-
 class HelperProcessOperation final : public InjectionOperation {
 public:
     void Attach(HANDLE process) noexcept {
@@ -172,7 +170,7 @@ InjectionResult Injector::InjectWith32BitHelper(
 
     operation->Attach(processInfo.hProcess);
     CloseHandle(processInfo.hThread);
-    const DWORD waitResult = WaitForSingleObject(processInfo.hProcess, kHelperTimeoutMs);
+    const DWORD waitResult = WaitForSingleObject(processInfo.hProcess, 0);
     if (waitResult == WAIT_OBJECT_0) {
         InjectionCompletion completion;
         if (operation->TryComplete(completion)) {
@@ -185,9 +183,9 @@ InjectionResult Injector::InjectWith32BitHelper(
         }
     } else {
         result.status = InjectionStatus::Pending;
-        result.error = waitResult == WAIT_TIMEOUT
-                           ? L"等待 32 位注入辅助程序超时"
-                           : Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
+        if (waitResult != WAIT_TIMEOUT) {
+            result.error = Win32Support::ErrorMessage(L"等待 32 位注入辅助程序失败");
+        }
         result.pendingOperation = std::move(operation);
     }
 
