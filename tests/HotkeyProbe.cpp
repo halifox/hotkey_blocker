@@ -1,6 +1,8 @@
 #include <windows.h>
 
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -65,9 +67,21 @@ int wmain(int argc, wchar_t* argv[]) {
     const bool baselineAllowed = TryRegister(MOD_NOREPEAT, VK_F24, kAllowedHotKeyId);
     const bool baselineSelected =
         TryRegister(MOD_NOREPEAT | MOD_CONTROL | MOD_ALT, VK_F24, kSelectedHotKeyId);
+    // Keep other target threads inside RegisterHotKey while the hook is installed.
+    std::vector<std::jthread> callers;
+    for (UINT index = 0; index < 4; ++index) {
+        callers.emplace_back([index](std::stop_token stop) {
+            while (!stop.stop_requested()) {
+                TryRegister(MOD_NOREPEAT | MOD_SHIFT, VK_F20 + index, 100 + index);
+                SwitchToThread();
+            }
+        });
+    }
     SetEvent(ready);
 
     const DWORD waitResult = WaitForSingleObject(release, 15000);
+    for (auto& caller : callers) caller.request_stop();
+    callers.clear();
     if (waitResult != WAIT_OBJECT_0) {
         CloseHandle(ready);
         CloseHandle(release);
