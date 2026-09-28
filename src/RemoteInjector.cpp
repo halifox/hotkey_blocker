@@ -153,9 +153,13 @@ std::wstring FullPath(const std::wstring& path) {
 
 }  // namespace
 
-RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPath,
+RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, const std::wstring& dllPath,
                                            bool waitForCompletion) {
     RemoteInjectionResult result;
+    if (identity.pid == 0 || identity.creationTime == 0) {
+        result.error = L"目标进程标识无效";
+        return result;
+    }
     const std::wstring absoluteDllPath = FullPath(dllPath);
     if (absoluteDllPath.empty()) {
         result.error = L"无法解析 Hook DLL 路径";
@@ -182,9 +186,18 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
 
     HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                                      PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | SYNCHRONIZE,
-                                 FALSE, pid);
+                                 FALSE, identity.pid);
     if (process == nullptr) {
         result.error = Win32Support::ErrorMessage(L"打开目标进程失败");
+        return result;
+    }
+
+    ProcessIdentity actual;
+    if (!QueryProcessIdentity(process, actual) || actual.pid != identity.pid ||
+        actual.creationTime != identity.creationTime ||
+        WaitForSingleObject(process, 0) != WAIT_TIMEOUT) {
+        result.error = L"目标进程已退出或进程标识已变化";
+        CloseHandle(process);
         return result;
     }
 

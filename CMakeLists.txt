@@ -166,6 +166,16 @@ if (HKB_BUILD_TESTS)
     target_link_libraries(hkb_config_store_test PRIVATE ole32 shell32)
     add_test(NAME hkb_config_store_round_trip COMMAND hkb_config_store_test)
 
+    add_executable(hkb_injection_identity_test
+            tests/InjectionIdentityTest.cpp
+            src/RemoteInjector.cpp
+            src/Win32Support.cpp)
+    target_include_directories(hkb_injection_identity_test PRIVATE src)
+    hkb_configure_target(hkb_injection_identity_test)
+    target_link_libraries(hkb_injection_identity_test PRIVATE ole32 shell32)
+    add_dependencies(hkb_injection_identity_test hotkey_hook)
+    add_test(NAME hkb_injection_identity COMMAND hkb_injection_identity_test)
+
     add_executable(hotkey_probe tests/HotkeyProbe.cpp)
     hkb_configure_target(hotkey_probe)
     target_link_libraries(hotkey_probe PRIVATE user32)

@@ -2,6 +2,7 @@
 
 #include "ArchitectureDetector.h"
 #include "InjectionStatus.h"
+#include "ProcessIdentity.h"
 
 #include <filesystem>
 #include <memory>
@@ -23,10 +24,11 @@ public:
     Injector();
     explicit Injector(std::filesystem::path executableDirectory);
 
-    InjectionResult Inject(DWORD pid) const;
+    InjectionResult Inject(const ProcessIdentity& process) const;
 
 private:
-    InjectionResult InjectWith32BitHelper(DWORD pid, const std::filesystem::path& dllPath) const;
+    InjectionResult InjectWith32BitHelper(const ProcessIdentity& process,
+                                          const std::filesystem::path& dllPath) const;
     static std::wstring QuoteCommandLineArgument(const std::wstring& argument);
     static std::filesystem::path ExecutableDirectory();
 

@@ -97,9 +97,9 @@ Injector::Injector() : m_executableDirectory(ExecutableDirectory()) {}
 Injector::Injector(std::filesystem::path executableDirectory)
     : m_executableDirectory(std::move(executableDirectory)) {}
 
-InjectionResult Injector::Inject(DWORD pid) const {
+InjectionResult Injector::Inject(const ProcessIdentity& process) const {
     InjectionResult result;
-    const ArchitectureResult architecture = DetectProcessArchitecture(pid);
+    const ArchitectureResult architecture = DetectProcessArchitecture(process.pid);
     result.architecture = architecture.architecture;
     if (architecture.architecture == ProcessArchitecture::Unknown) {
         result.error = architecture.error.empty() ? L"无法识别目标进程架构" : architecture.error;
@@ -121,11 +121,11 @@ InjectionResult Injector::Inject(DWORD pid) const {
     }
 
     if (targetIs32Bit && sizeof(void*) == 8) {
-        return InjectWith32BitHelper(pid, dllPath);
+        return InjectWith32BitHelper(process, dllPath);
     }
 
     const RemoteInjectionResult remoteResult =
-        InjectDllIntoProcess(pid, dllPath.wstring());
+        InjectDllIntoProcess(process, dllPath.wstring());
     result.status = remoteResult.status;
     result.error = remoteResult.error;
     result.pendingOperation = remoteResult.pendingOperation;
@@ -133,7 +133,7 @@ InjectionResult Injector::Inject(DWORD pid) const {
 }
 
 InjectionResult Injector::InjectWith32BitHelper(
-    DWORD pid, const std::filesystem::path& dllPath) const {
+    const ProcessIdentity& process, const std::filesystem::path& dllPath) const {
     InjectionResult result;
     result.architecture = ProcessArchitecture::X86;
 
@@ -156,7 +156,8 @@ InjectionResult Injector::InjectWith32BitHelper(
     }
 
     std::wstring commandLine = QuoteCommandLineArgument(helper.wstring());
-    commandLine += L" " + std::to_wstring(pid);
+    commandLine += L" " + std::to_wstring(process.pid);
+    commandLine += L" " + std::to_wstring(process.creationTime);
     commandLine += L" " + QuoteCommandLineArgument(dllPath.wstring());
 
     STARTUPINFOW startupInfo{};

@@ -3,39 +3,47 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <cerrno>
 #include <iostream>
 #include <utility>
 
 namespace {
 
-bool ParsePid(const wchar_t* text, DWORD& pid) {
+bool ParseNumber(const wchar_t* text, ULONGLONG& number) {
     if (text == nullptr || *text == L'\0') {
         return false;
     }
     wchar_t* end = nullptr;
-    const unsigned long value = wcstoul(text, &end, 10);
-    if (end == text || *end != L'\0' || value == 0 || value > MAXDWORD) {
+    for (const wchar_t* digit = text; *digit; ++digit) {
+        if (*digit < L'0' || *digit > L'9') return false;
+    }
+    errno = 0;
+    const unsigned long long value = wcstoull(text, &end, 10);
+    if (end == text || *end != L'\0' || value == 0 || errno == ERANGE) {
         return false;
     }
-    pid = static_cast<DWORD>(value);
+    number = value;
     return true;
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
-    if (argc != 3) {
-        std::wcerr << L"用法：HotkeyBlockerInjector32.exe <PID> <HookDllPath>\n";
+    if (argc != 4) {
+        std::wcerr << L"用法：HotkeyBlockerInjector32.exe <PID> <CreationTime> <HookDllPath>\n";
         return static_cast<int>(InjectorHelperExitCode::InvalidArguments);
     }
 
-    DWORD pid = 0;
-    if (!ParsePid(argv[1], pid)) {
-        std::wcerr << L"无效 PID\n";
+    ULONGLONG pid = 0;
+    ULONGLONG creationTime = 0;
+    if (!ParseNumber(argv[1], pid) || pid > MAXDWORD ||
+        !ParseNumber(argv[2], creationTime)) {
+        std::wcerr << L"无效进程标识\n";
         return static_cast<int>(InjectorHelperExitCode::InvalidArguments);
     }
 
-    RemoteInjectionResult result = InjectDllIntoProcess(pid, argv[2], true);
+    RemoteInjectionResult result = InjectDllIntoProcess(
+        {static_cast<DWORD>(pid), creationTime}, argv[3], true);
     while (result.status == InjectionStatus::Pending && result.pendingOperation != nullptr) {
         InjectionCompletion completion;
         if (result.pendingOperation->TryComplete(completion)) {

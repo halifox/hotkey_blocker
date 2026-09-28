@@ -484,7 +484,7 @@ void BlockerService::RunInjectionWorker() {
         }
 
         Log(L"开始注入 PID=" + std::to_wstring(request.process.identity.pid));
-        InjectionResult injection = m_injector.Inject(request.process.identity.pid);
+        InjectionResult injection = m_injector.Inject(request.process.identity);
         if (injection.status == InjectionStatus::Pending &&
             injection.pendingOperation != nullptr) {
             ApplyInjectionResult(request, injection);

@@ -127,7 +127,9 @@ int wmain(int argc, wchar_t* argv[]) {
     int exitCode = 1;
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0) {
         const Injector injector(directory);
-        const InjectionResult injection = injector.Inject(processInfo.dwProcessId);
+        ProcessIdentity identity;
+        QueryProcessIdentity(processInfo.hProcess, identity);
+        const InjectionResult injection = injector.Inject(identity);
         if (injection.IsSuccess()) {
             SetEvent(release);
             if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
