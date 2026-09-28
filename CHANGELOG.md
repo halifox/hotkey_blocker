@@ -1,5 +1,12 @@
 # 变更记录
 
+## [1.1.2](https://github.com/halifox/hotkey_blocker/compare/v1.1.1...v1.1.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* harden hotkey interception lifecycle and validation ([bb2afdd](https://github.com/halifox/hotkey_blocker/commit/bb2afddac22f5d99038dc82b990aa81e68fedc93))
+
 ## [1.1.1](https://github.com/halifox/hotkey_blocker/compare/v1.1.0...v1.1.1) (2026-09-28)
 
 
