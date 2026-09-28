@@ -64,7 +64,44 @@ LRESULT MainView::OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
     m_applicationList.Initialize();
     DlgResize_Init(false, false, WS_CLIPCHILDREN);
     m_ready = true;
+    UpdateSelectionButtons();
     return TRUE;
+}
+
+LRESULT MainView::OnAddExecutable(WORD, WORD, HWND, BOOL& handled) {
+    handled = TRUE;
+    if (m_actionHandler) m_actionHandler(L"", ApplicationListAction::AddExecutable);
+    return 0;
+}
+
+LRESULT MainView::OnAddFolder(WORD, WORD, HWND, BOOL& handled) {
+    handled = TRUE;
+    if (m_actionHandler) m_actionHandler(L"", ApplicationListAction::AddFolder);
+    return 0;
+}
+
+LRESULT MainView::OnConfigure(WORD, WORD, HWND, BOOL& handled) {
+    handled = TRUE;
+    DispatchKeyboardAction(ApplicationListAction::Configure);
+    return 0;
+}
+
+LRESULT MainView::OnDelete(WORD, WORD, HWND, BOOL& handled) {
+    handled = TRUE;
+    DispatchKeyboardAction(ApplicationListAction::Delete);
+    return 0;
+}
+
+LRESULT MainView::OnListItemChanged(int, LPNMHDR, BOOL& handled) {
+    UpdateSelectionButtons();
+    handled = FALSE;
+    return 0;
+}
+
+void MainView::UpdateSelectionButtons() {
+    const BOOL hasSelection = SelectedPath().empty() ? FALSE : TRUE;
+    ::EnableWindow(GetDlgItem(IDC_APP_CONFIGURE), hasSelection);
+    ::EnableWindow(GetDlgItem(IDC_APP_DELETE), hasSelection);
 }
 
 void MainView::DispatchKeyboardAction(ApplicationListAction action) {

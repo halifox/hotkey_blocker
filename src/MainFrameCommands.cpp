@@ -23,10 +23,19 @@
 #include "PathUtils.h"
 
 void MainFrame::HandleListAction(const std::wstring& path, ApplicationListAction action) {
-    if (action == ApplicationListAction::Configure) {
-        ConfigureApplication(path);
-    } else {
-        DeleteApplication(path);
+    switch (action) {
+        case ApplicationListAction::Configure:
+            ConfigureApplication(path);
+            break;
+        case ApplicationListAction::Delete:
+            DeleteApplication(path);
+            break;
+        case ApplicationListAction::AddExecutable:
+            AddExecutableApplication();
+            break;
+        case ApplicationListAction::AddFolder:
+            AddFolderApplication();
+            break;
     }
 }
 
