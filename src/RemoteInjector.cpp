@@ -2,6 +2,7 @@
 #include "Win32Support.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <filesystem>
 #include <memory>
@@ -9,10 +10,11 @@
 
 namespace {
 
-constexpr DWORD kInjectionTimeoutMs = 10000;
-
 class RemoteThreadOperation final : public InjectionOperation {
 public:
+    explicit RemoteThreadOperation(std::wstring dllPath, ULONG_PTR initializerOffset)
+        : m_dllPath(std::move(dllPath)), m_initializerOffset(initializerOffset) {}
+
     void Attach(HANDLE process, HANDLE thread, LPVOID remotePath) noexcept {
         m_process = process;
         m_thread = thread;
@@ -61,13 +63,45 @@ public:
             return false;
         }
 
-        DWORD moduleHandle = 0;
-        if (!GetExitCodeThread(m_thread, &moduleHandle)) {
+        DWORD threadResult = 0;
+        if (!GetExitCodeThread(m_thread, &threadResult)) {
             completion.status = InjectionStatus::Indeterminate;
             completion.error = Win32Support::ErrorMessage(L"获取远程线程结果失败");
-        } else if (moduleHandle == 0) {
+        } else if (!m_initializing) {
+            // A thread exit code truncates HMODULE on x64. Resolve the full base
+            // address from the target's module list instead.
+            ULONG_PTR base = 0;
+            HANDLE snapshot = INVALID_HANDLE_VALUE;
+            for (int attempt = 0; attempt < 8; ++attempt) {
+                snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetProcessId(m_process));
+                if (snapshot != INVALID_HANDLE_VALUE || GetLastError() != ERROR_BAD_LENGTH) break;
+            }
+            if (snapshot != INVALID_HANDLE_VALUE) {
+                MODULEENTRY32W entry{sizeof(entry)};
+                for (BOOL next = Module32FirstW(snapshot, &entry); next;
+                     next = Module32NextW(snapshot, &entry)) {
+                    if (_wcsicmp(entry.szExePath, m_dllPath.c_str()) == 0) {
+                        base = reinterpret_cast<ULONG_PTR>(entry.modBaseAddr);
+                        break;
+                    }
+                }
+                CloseHandle(snapshot);
+            }
+            if (base != 0) {
+                CloseHandle(m_thread);
+                m_thread = CreateRemoteThread(m_process, nullptr, 0,
+                    reinterpret_cast<LPTHREAD_START_ROUTINE>(base + m_initializerOffset),
+                    nullptr, 0, nullptr);
+                m_initializing = true;
+                if (m_thread != nullptr) return false;
+                completion.error = Win32Support::ErrorMessage(L"创建 Hook 初始化线程失败");
+            } else {
+                completion.error = L"目标进程未加载预期的 Hook DLL";
+            }
             completion.status = InjectionStatus::Failed;
-            completion.error = L"目标进程拒绝加载 Hook DLL";
+        } else if (threadResult != ERROR_SUCCESS) {
+            completion.status = InjectionStatus::Failed;
+            completion.error = Win32Support::ErrorMessage(L"Hook 初始化失败", threadResult);
         } else {
             completion.status = InjectionStatus::Succeeded;
         }
@@ -95,6 +129,9 @@ private:
     HANDLE m_process = nullptr;
     HANDLE m_thread = nullptr;
     LPVOID m_remotePath = nullptr;
+    std::wstring m_dllPath;
+    ULONG_PTR m_initializerOffset = 0;
+    bool m_initializing = false;
 };
 
 std::wstring FullPath(const std::wstring& path) {
@@ -114,9 +151,12 @@ std::wstring FullPath(const std::wstring& path) {
 
 }  // namespace
 
-RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPath,
-                                           bool waitForCompletion) {
+RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, const std::wstring& dllPath) {
     RemoteInjectionResult result;
+    if (identity.pid == 0 || identity.creationTime == 0) {
+        result.error = L"目标进程标识无效";
+        return result;
+    }
     const std::wstring absoluteDllPath = FullPath(dllPath);
     if (absoluteDllPath.empty()) {
         result.error = L"无法解析 Hook DLL 路径";
@@ -129,11 +169,32 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
         return result;
     }
 
+    // Map only to resolve the export RVA; do not execute the hook in the injector.
+    HMODULE image = LoadLibraryExW(absoluteDllPath.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
+    FARPROC initializer = image == nullptr ? nullptr : GetProcAddress(image, "HkbInitializeHook");
+    if (initializer == nullptr) {
+        result.error = L"Hook DLL 缺少初始化入口";
+        if (image != nullptr) FreeLibrary(image);
+        return result;
+    }
+    const ULONG_PTR initializerOffset = reinterpret_cast<ULONG_PTR>(initializer) -
+                                        reinterpret_cast<ULONG_PTR>(image);
+    FreeLibrary(image);
+
     HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
-                                     PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
-                                 FALSE, pid);
+                                     PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | SYNCHRONIZE,
+                                 FALSE, identity.pid);
     if (process == nullptr) {
         result.error = Win32Support::ErrorMessage(L"打开目标进程失败");
+        return result;
+    }
+
+    ProcessIdentity actual;
+    if (!QueryProcessIdentity(process, actual) || actual.pid != identity.pid ||
+        actual.creationTime != identity.creationTime ||
+        WaitForSingleObject(process, 0) != WAIT_TIMEOUT) {
+        result.error = L"目标进程已退出或进程标识已变化";
+        CloseHandle(process);
         return result;
     }
 
@@ -169,7 +230,7 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
 
     std::shared_ptr<RemoteThreadOperation> operation;
     try {
-        operation = std::make_shared<RemoteThreadOperation>();
+        operation = std::make_shared<RemoteThreadOperation>(absoluteDllPath, initializerOffset);
     } catch (...) {
         result.error = L"无法保留远程注入操作状态";
         VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
@@ -188,21 +249,7 @@ RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPat
     }
     operation->Attach(process, remoteThread, remotePath);
 
-    const DWORD waitResult = WaitForSingleObject(
-        remoteThread, waitForCompletion ? INFINITE : kInjectionTimeoutMs);
-    if (waitResult != WAIT_OBJECT_0) {
-        result.status = InjectionStatus::Pending;
-        result.error = waitResult == WAIT_TIMEOUT
-                           ? L"等待远程 DLL 加载超时"
-                           : Win32Support::ErrorMessage(L"等待远程线程失败");
-        result.pendingOperation = std::move(operation);
-        return result;
-    }
-
-    InjectionCompletion completion;
-    if (operation->TryComplete(completion)) {
-        result.status = completion.status;
-        result.error = std::move(completion.error);
-    }
+    result.status = InjectionStatus::Pending;
+    result.pendingOperation = std::move(operation);
     return result;
 }

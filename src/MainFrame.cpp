@@ -22,7 +22,8 @@
 #include "HotkeyPolicyDialog.h"
 #include "Version.h"
 
-MainFrame::MainFrame(bool startHidden) noexcept : m_startHidden(startHidden) {}
+MainFrame::MainFrame(bool startHidden, HANDLE activationEvent) noexcept
+    : m_startHidden(startHidden), m_activationEvent(activationEvent) {}
 
 UINT MainFrame::TaskbarCreatedMessage() noexcept {
     static const UINT message = ::RegisterWindowMessageW(L"TaskbarCreated");
@@ -61,10 +62,16 @@ bool MainFrame::Initialize() {
         m_application.Log().Error(L"创建系统托盘图标失败，窗口将保持可见");
         ShowError(L"托盘初始化失败",
                   L"无法创建系统托盘图标，程序将保持窗口可见；关闭窗口将退出程序。");
+        SetTimer(kTrayRestoreTimer, 1000);
     }
     NotifyActionableStates();
     if (m_trayIcon.IsAdded()) {
         StartUpdateCheck(false);
+    }
+    if (SetTimer(kActivationTimer, 200) == 0) {
+        m_initializationFailed = true;
+        ShowError(L"初始化失败", L"无法启动窗口激活检查。");
+        return false;
     }
     return true;
 }
@@ -116,12 +123,15 @@ LRESULT MainFrame::OnTaskbarCreated(UINT, WPARAM, LPARAM, BOOL& handled) {
         return 0;
     }
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
+    m_trayRestoreAttempts = 0;
     RestoreTrayIcon();
     return 0;
 }
 
 LRESULT MainFrame::OnTrayMessage(UINT, WPARAM, LPARAM lParam, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     switch (LOWORD(lParam)) {
         case WM_LBUTTONUP:
         case WM_LBUTTONDBLCLK:
@@ -145,6 +155,7 @@ LRESULT MainFrame::OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& han
     if (!result) {
         return 0;
     }
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
 
     m_updateCheckRunning = false;
     if (!result->error.empty()) {
@@ -182,6 +193,7 @@ LRESULT MainFrame::OnUpdateCheckCompleted(UINT, WPARAM, LPARAM lParam, BOOL& han
 
 LRESULT MainFrame::OnStateChanged(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     for (;;) {
         m_stateNotificationPosted.store(false, std::memory_order_release);
         RefreshListView(false);
@@ -231,8 +243,9 @@ LRESULT MainFrame::OnExit(WORD, WORD, HWND, BOOL& handled) {
 
 LRESULT MainFrame::OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
+    if (m_shuttingDown.load(std::memory_order_acquire)) return 0;
     if (m_initializationFailed || !m_trayIcon.IsAdded()) {
-        DestroyWindow();
+        ExitApplication();
         return 0;
     }
     ShowWindow(SW_HIDE);
@@ -241,9 +254,15 @@ LRESULT MainFrame::OnClose(UINT, WPARAM, LPARAM, BOOL& handled) {
 
 LRESULT MainFrame::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
     handled = TRUE;
-    if (m_shuttingDown.exchange(true, std::memory_order_acq_rel)) {
+    if (m_destroyed) {
         return 0;
     }
+    m_destroyed = true;
+    m_shuttingDown.store(true, std::memory_order_release);
+    KillTimer(kShutdownTimer);
+    KillTimer(kActivationTimer);
+    KillTimer(kTrayRestoreTimer);
+    if (m_shutdownThread.joinable()) m_shutdownThread.join();
 
     m_updateChecker.Stop();
     DrainUpdateCheckMessages();
@@ -261,10 +280,19 @@ void MainFrame::RestoreTrayIcon() {
     if (m_hWnd == nullptr) {
         return;
     }
+    ++m_trayRestoreAttempts;
     if (!m_trayIcon.Restore()) {
         m_application.Log().Error(L"Explorer 重启后重新创建系统托盘图标失败");
+        ShowFromTray();
+        if (m_trayRestoreAttempts < kMaxTrayRestoreAttempts) {
+            SetTimer(kTrayRestoreTimer, 1000);
+        } else {
+            KillTimer(kTrayRestoreTimer);
+        }
         return;
     }
+    KillTimer(kTrayRestoreTimer);
+    m_trayRestoreAttempts = 0;
     NotifyActionableStates();
 }
 
@@ -304,10 +332,43 @@ void MainFrame::ShowTrayMenu() {
 }
 
 void MainFrame::ExitApplication() {
-    DestroyWindow();
+    if (m_shuttingDown.exchange(true, std::memory_order_acq_rel)) return;
+    m_application.SetStateChangedCallback({});
+    m_updateChecker.RequestStop();
+    EnableWindow(FALSE);
+    if (SetTimer(kShutdownTimer, 50) == 0) {
+        DestroyWindow();
+        return;
+    }
+    try {
+        m_shutdownThread = std::thread([this] {
+            m_updateChecker.Stop();
+            m_application.Stop();
+            m_shutdownComplete.store(true, std::memory_order_release);
+        });
+    } catch (...) {
+        KillTimer(kShutdownTimer);
+        DestroyWindow();
+    }
+}
+
+LRESULT MainFrame::OnTimer(UINT, WPARAM timer, LPARAM, BOOL& handled) {
+    handled = TRUE;
+    if (timer == kShutdownTimer) {
+        if (m_shutdownComplete.load(std::memory_order_acquire)) DestroyWindow();
+    } else if (timer == kActivationTimer) {
+        if (!m_shuttingDown.load(std::memory_order_acquire) &&
+            WaitForSingleObject(m_activationEvent, 0) == WAIT_OBJECT_0) ShowFromTray();
+    } else if (timer == kTrayRestoreTimer) {
+        if (!m_shuttingDown.load(std::memory_order_acquire)) RestoreTrayIcon();
+    } else {
+        handled = FALSE;
+    }
+    return 0;
 }
 
 void MainFrame::StartUpdateCheck(bool interactive) {
+    if (m_shuttingDown.load(std::memory_order_acquire)) return;
     if (m_updateCheckRunning) {
         if (interactive) {
             MessageBox(L"版本检查正在进行，请稍候。", L"检查更新",
@@ -388,11 +449,11 @@ void MainFrame::DestroyWindowIcons() noexcept {
     m_smallIcon = nullptr;
 }
 
-int RunMainFrame(CMessageLoop& messageLoop, bool startHidden) {
+int RunMainFrame(CMessageLoop& messageLoop, bool startHidden, HANDLE activationEvent) {
     constexpr int kDefaultWindowWidth = 640;
     constexpr int kDefaultWindowHeight = 420;
 
-    MainFrame frame(startHidden);
+    MainFrame frame(startHidden, activationEvent);
     RECT defaultWindowRect{0, 0, kDefaultWindowWidth, kDefaultWindowHeight};
     if (frame.CreateEx(nullptr, &defaultWindowRect) == nullptr) {
         return 1;

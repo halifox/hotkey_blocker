@@ -126,10 +126,14 @@ bool UpdateChecker::Start(CompletionCallback callback) {
 }
 
 void UpdateChecker::Stop() {
-    m_stopRequested.store(true, std::memory_order_release);
+    RequestStop();
     if (m_thread.joinable()) {
         m_thread.join();
     }
+}
+
+void UpdateChecker::RequestStop() noexcept {
+    m_stopRequested.store(true, std::memory_order_release);
 }
 
 UpdateCheckResult UpdateChecker::CheckLatestRelease() {
@@ -144,7 +148,11 @@ UpdateCheckResult UpdateChecker::CheckLatestRelease() {
         cpr::Header{{"Accept", "application/vnd.github+json"},
                     {"User-Agent", "HotkeyBlocker"}},
         cpr::Timeout{5000}, cpr::ConnectTimeout{3000},
-        cpr::WriteCallback{[&response](std::string_view chunk, intptr_t) {
+        cpr::ProgressCallback{[this](auto, auto, auto, auto, intptr_t) {
+            return !m_stopRequested.load(std::memory_order_acquire);
+        }},
+        cpr::WriteCallback{[this, &response](std::string_view chunk, intptr_t) {
+            if (m_stopRequested.load(std::memory_order_acquire)) return false;
             response.append(chunk.data(), chunk.size());
             return true;
         }});

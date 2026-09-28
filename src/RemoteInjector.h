@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InjectionStatus.h"
+#include "ProcessIdentity.h"
 
 #include <windows.h>
 
@@ -19,5 +20,4 @@ enum class InjectorHelperExitCode : DWORD {
     InvalidArguments = 2,
 };
 
-RemoteInjectionResult InjectDllIntoProcess(DWORD pid, const std::wstring& dllPath,
-                                           bool waitForCompletion = false);
+RemoteInjectionResult InjectDllIntoProcess(const ProcessIdentity& identity, const std::wstring& dllPath);

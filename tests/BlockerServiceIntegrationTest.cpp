@@ -109,9 +109,11 @@ bool ReadText(const std::filesystem::path& path, std::string& text) {
 
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t* argv[]) {
+    const bool win32 = argc == 2 && _wcsicmp(argv[1], L"--win32") == 0;
+    if (argc > 2 || (argc == 2 && !win32)) return 8;
     const std::filesystem::path directory = std::filesystem::path(ModulePath()).parent_path();
-    const std::filesystem::path probe = directory / L"hotkey_probe.exe";
+    const std::filesystem::path probe = (win32 ? directory / L"win32" : directory) / L"hotkey_probe.exe";
     if (directory.empty() || GetFileAttributesW(probe.c_str()) == INVALID_FILE_ATTRIBUTES) {
         std::wcerr << L"找不到同目录下的 hotkey_probe.exe\n";
         return 1;
@@ -194,7 +196,7 @@ int wmain() {
     int result = 6;
     std::wstring detail;
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0 &&
-        WaitForStatus(service, waiter, AppStatus::Blocked, 10000, detail)) {
+        WaitForStatus(service, waiter, AppStatus::HookReady, 10000, detail)) {
         SetEvent(release);
         if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
             DWORD childExitCode = 1;
@@ -207,11 +209,15 @@ int wmain() {
                  output.find("after_allowed=1") != std::string::npos &&
                  output.find("baseline_selected=1") != std::string::npos &&
                  output.find("after_selected=0") != std::string::npos) {
-                result = 0;
+                if (output.find("early_survived=1") != std::string::npos &&
+                    detail.find(L"启动阶段已注册的快捷键不会被撤销") != std::wstring::npos &&
+                    std::wstring(AppStatusText(AppStatus::HookReady)) == L"拦截器已就绪") {
+                    result = 0;
+                }
             }
         }
     } else {
-        std::wcerr << L"服务未进入已拦截状态：" << detail << L'\n';
+        std::wcerr << L"服务未进入拦截器就绪状态：" << detail << L'\n';
         SetEvent(release);
     }
 

@@ -1,4 +1,5 @@
 #include "Injector.h"
+#include "HotkeyPolicyTransport.h"
 
 #include <windows.h>
 
@@ -62,6 +63,21 @@ bool ReadText(const std::filesystem::path& path, std::string& text) {
     return true;
 }
 
+InjectionResult CompleteInjection(InjectionResult injection) {
+    const ULONGLONG deadline = GetTickCount64() + 10000;
+    while (injection.pendingOperation && GetTickCount64() < deadline) {
+        InjectionCompletion completion;
+        if (injection.pendingOperation->TryComplete(completion)) {
+            injection.status = completion.status;
+            injection.error = completion.error;
+            injection.pendingOperation.reset();
+        } else {
+            Sleep(10);
+        }
+    }
+    return injection;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
@@ -79,7 +95,8 @@ int wmain(int argc, wchar_t* argv[]) {
         use32BitTarget ? directory / L"win32" : directory;
     const std::filesystem::path probe = probeDirectory / L"hotkey_probe.exe";
     const std::filesystem::path hook =
-        use32BitTarget ? probeDirectory / L"HotkeyHook32.dll" : directory / L"HotkeyHook64.dll";
+        (use32BitTarget || sizeof(void*) == 4) ? probeDirectory / L"HotkeyHook32.dll"
+                                             : directory / L"HotkeyHook64.dll";
     if (GetFileAttributesW(probe.c_str()) == INVALID_FILE_ATTRIBUTES ||
         GetFileAttributesW(hook.c_str()) == INVALID_FILE_ATTRIBUTES) {
         return 11;
@@ -125,9 +142,22 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     int exitCode = 1;
+    HotkeyPolicyRegistry registry;
+    std::wstring policyError;
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0) {
         const Injector injector(directory);
-        const InjectionResult injection = injector.Inject(processInfo.dwProcessId);
+        ProcessIdentity identity;
+        QueryProcessIdentity(processInfo.hProcess, identity);
+        ProcessIdentity stale = identity;
+        ++stale.creationTime;
+        const auto rejected = CompleteInjection(injector.Inject(stale));
+        InjectionResult injection;
+        if (rejected.status == InjectionStatus::Failed && registry.Start(policyError) &&
+            registry.Publish(identity, HotkeyPolicy{}, policyError)) {
+            injection = CompleteInjection(injector.Inject(identity));
+        } else {
+            injection.error = L"进程身份拒绝或测试策略发布失败：" + policyError;
+        }
         if (injection.IsSuccess()) {
             SetEvent(release);
             if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
@@ -159,6 +189,7 @@ int wmain(int argc, wchar_t* argv[]) {
     const bool read = ReadText(outputPath, output);
     DeleteFileW(outputPath.c_str());
     return read && output.find("baseline=1") != std::string::npos &&
+                   output.find("early_survived=1") != std::string::npos &&
                    output.find("blocked=1") != std::string::npos && exitCode == 0
                ? 0
                : 15;

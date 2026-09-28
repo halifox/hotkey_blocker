@@ -27,7 +27,7 @@ class MainFrame final : public WTL::CFrameWindowImpl<MainFrame>,
 public:
     DECLARE_FRAME_WND_CLASS(L"HotkeyBlocker.MainFrame", IDR_MAINFRAME)
 
-    explicit MainFrame(bool startHidden) noexcept;
+    MainFrame(bool startHidden, HANDLE activationEvent) noexcept;
 
     bool Initialize();
     bool ShouldStartHidden() const noexcept;
@@ -52,6 +52,7 @@ public:
         COMMAND_ID_HANDLER(ID_TRAY_EXIT, OnExit)
         MESSAGE_HANDLER(WM_CLOSE, OnClose)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+        MESSAGE_HANDLER(WM_TIMER, OnTimer)
         CHAIN_MSG_MAP(WTL::CUpdateUI<MainFrame>)
         CHAIN_MSG_MAP(WTL::CFrameWindowImpl<MainFrame>)
     END_MSG_MAP()
@@ -60,6 +61,10 @@ private:
     static constexpr UINT kTrayMessage = WM_APP + 1;
     static constexpr UINT kStateChangedMessage = WM_APP + 2;
     static constexpr UINT kUpdateCheckCompletedMessage = WM_APP + 3;
+    static constexpr UINT_PTR kShutdownTimer = 1;
+    static constexpr UINT_PTR kActivationTimer = 2;
+    static constexpr UINT_PTR kTrayRestoreTimer = 3;
+    static constexpr unsigned kMaxTrayRestoreAttempts = 5;
 
     static UINT TaskbarCreatedMessage() noexcept;
     LRESULT OnCreate(UINT, WPARAM, LPARAM, BOOL& handled);
@@ -76,6 +81,7 @@ private:
     LRESULT OnExit(WORD, WORD, HWND, BOOL& handled);
     LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL& handled);
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled);
+    LRESULT OnTimer(UINT, WPARAM, LPARAM, BOOL& handled);
 
     void HandleListAction(const std::wstring& path, ApplicationListAction action);
     void RestoreTrayIcon();
@@ -102,8 +108,13 @@ private:
     void ShowErrorCode(const wchar_t* title, HRESULT result);
 
     bool m_startHidden = false;
+    HANDLE m_activationEvent = nullptr; // Borrowed from wWinMain.
+    unsigned m_trayRestoreAttempts = 0;
     bool m_initializationFailed = false;
     std::atomic_bool m_shuttingDown = false;
+    bool m_destroyed = false;
+    std::atomic_bool m_shutdownComplete = false;
+    std::thread m_shutdownThread;
     MainView m_mainView;
     CIcon m_largeIcon;
     CIcon m_smallIcon;
@@ -118,4 +129,4 @@ private:
     std::atomic_bool m_stateNotificationPosted = false;
 };
 
-int RunMainFrame(CMessageLoop& messageLoop, bool startHidden);
+int RunMainFrame(CMessageLoop& messageLoop, bool startHidden, HANDLE activationEvent);

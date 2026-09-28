@@ -1,31 +1,26 @@
 #include "RegisterHotKeyHook.h"
 #include "HotkeyPolicyTransport.h"
 
-#include <windows.h>
+// Stable export name for both x86 stdcall and x64 builds.
+#ifdef _M_IX86
+#pragma comment(linker, "/EXPORT:HkbInitializeHook=_HkbInitializeHook@4")
+#else
+#pragma comment(linker, "/EXPORT:HkbInitializeHook")
+#endif
 
-BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
-    (void)instance;
-    switch (reason) {
-        case DLL_PROCESS_ATTACH:
-            DisableThreadLibraryCalls(instance);
-            if (!RetainHotkeyPolicyMappingForCurrentProcess()) {
-                return FALSE;
-            }
-            if (!InstallRegisterHotKeyHook()) {
-                // Returning FALSE makes LoadLibraryW report a failed load to
-                // the injector instead of silently running without a hook.
-                ReleaseHotkeyPolicyMappingForCurrentProcess();
-                return FALSE;
-            }
-            break;
-        case DLL_PROCESS_DETACH:
-            if (reserved == nullptr) {
-                RemoveRegisterHotKeyHook();
-            }
-            ReleaseHotkeyPolicyMappingForCurrentProcess();
-            break;
-        default:
-            break;
+extern "C" DWORD WINAPI HkbInitializeHook(LPVOID) {
+    try {
+        return InstallRegisterHotKeyHook() ? ERROR_SUCCESS : ERROR_DLL_INIT_FAILED;
+    } catch (...) {
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+}
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(instance);
+    } else if (reason == DLL_PROCESS_DETACH) {
+        ReleaseHotkeyPolicyMappingForCurrentProcess();
     }
     return TRUE;
 }

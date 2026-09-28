@@ -484,7 +484,7 @@ void BlockerService::RunInjectionWorker() {
         }
 
         Log(L"开始注入 PID=" + std::to_wstring(request.process.identity.pid));
-        InjectionResult injection = m_injector.Inject(request.process.identity.pid);
+        InjectionResult injection = m_injector.Inject(request.process.identity);
         if (injection.status == InjectionStatus::Pending &&
             injection.pendingOperation != nullptr) {
             ApplyInjectionResult(request, injection);
@@ -550,7 +550,7 @@ void BlockerService::ApplyInjectionResult(const InjectionRequest& request,
                          std::to_wstring(request.process.identity.pid);
         } else if (injection.status == InjectionStatus::Succeeded) {
             existing->operationRevision = 0;
-            existing->protection = ProcessProtection::Blocked;
+            existing->protection = ProcessProtection::HookReady;
             existing->detail = L"PID=" + std::to_wstring(request.process.identity.pid) + L"（" +
                                ArchitectureName(injection.architecture) + L"）";
             logMessage = L"注入成功 PID=" + std::to_wstring(request.process.identity.pid);
@@ -598,7 +598,7 @@ AppStatus BlockerService::StateForRule(
 
     const std::size_t blockedCount = static_cast<std::size_t>(std::count_if(
         processes.begin(), processes.end(), [](const TrackedProcess& process) {
-            return process.protection == ProcessProtection::Blocked;
+            return process.protection == ProcessProtection::HookReady;
         }));
     const bool hasPending = std::any_of(
         processes.begin(), processes.end(), [](const TrackedProcess& process) {
@@ -616,10 +616,10 @@ AppStatus BlockerService::StateForRule(
         });
 
     if (blockedCount == processes.size()) {
-        return AppStatus::Blocked;
+        return AppStatus::HookReady;
     }
     if (blockedCount > 0) {
-        return AppStatus::PartiallyBlocked;
+        return AppStatus::PartiallyReady;
     }
     if (hasFailed) {
         return AppStatus::InjectionFailed;
@@ -666,10 +666,10 @@ std::wstring BlockerService::DetailForRule(
             });
         return failed == processes.end() ? L"注入失败" : failed->detail;
     }
-    if (status == AppStatus::Blocked) {
-        std::wstring result;
+    if (status == AppStatus::HookReady) {
+        std::wstring result = L"仅处理后续注册；启动阶段已注册的快捷键不会被撤销。";
         for (const TrackedProcess& process : processes) {
-            if (process.protection != ProcessProtection::Blocked) {
+            if (process.protection != ProcessProtection::HookReady) {
                 continue;
             }
             if (!result.empty()) {
@@ -679,12 +679,12 @@ std::wstring BlockerService::DetailForRule(
         }
         return result;
     }
-    if (status == AppStatus::PartiallyBlocked) {
+    if (status == AppStatus::PartiallyReady) {
         std::size_t blockedCount = 0;
         std::size_t failedCount = 0;
         std::size_t pendingCount = 0;
         for (const TrackedProcess& process : processes) {
-            blockedCount += process.protection == ProcessProtection::Blocked ? 1u : 0u;
+            blockedCount += process.protection == ProcessProtection::HookReady ? 1u : 0u;
             failedCount += process.protection == ProcessProtection::Failed ? 1u : 0u;
             pendingCount += process.protection == ProcessProtection::Queued ||
                                     process.protection == ProcessProtection::Injecting ||
@@ -692,7 +692,7 @@ std::wstring BlockerService::DetailForRule(
                                 ? 1u
                                 : 0u;
         }
-        std::wstring result = L"已拦截 " + std::to_wstring(blockedCount) + L"/" +
+        std::wstring result = L"拦截器已就绪 " + std::to_wstring(blockedCount) + L"/" +
                               std::to_wstring(processes.size()) + L" 个进程";
         if (failedCount != 0) {
             result += L"，失败 " + std::to_wstring(failedCount) + L" 个";
@@ -721,10 +721,10 @@ const wchar_t* AppStatusText(AppStatus status) {
             return L"等待注入完成";
         case AppStatus::RestartRequired:
             return L"重启程序后生效";
-        case AppStatus::Blocked:
-            return L"拦截已生效";
-        case AppStatus::PartiallyBlocked:
-            return L"部分拦截生效";
+        case AppStatus::HookReady:
+            return L"拦截器已就绪";
+        case AppStatus::PartiallyReady:
+            return L"部分拦截器就绪";
         case AppStatus::InjectionFailed:
             return L"启用拦截失败";
         case AppStatus::PathMissing:

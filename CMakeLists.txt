@@ -166,47 +166,77 @@ if (HKB_BUILD_TESTS)
     target_link_libraries(hkb_config_store_test PRIVATE ole32 shell32)
     add_test(NAME hkb_config_store_round_trip COMMAND hkb_config_store_test)
 
+    add_executable(hkb_injection_identity_test
+            tests/InjectionIdentityTest.cpp
+            src/RemoteInjector.cpp
+            src/Win32Support.cpp)
+    target_include_directories(hkb_injection_identity_test PRIVATE src)
+    hkb_configure_target(hkb_injection_identity_test)
+    target_link_libraries(hkb_injection_identity_test PRIVATE ole32 shell32)
+    add_dependencies(hkb_injection_identity_test hotkey_hook)
+    add_test(NAME hkb_injection_identity COMMAND hkb_injection_identity_test)
+
     add_executable(hotkey_probe tests/HotkeyProbe.cpp)
     hkb_configure_target(hotkey_probe)
     target_link_libraries(hotkey_probe PRIVATE user32)
+    add_dependencies(hkb_injection_identity_test hotkey_probe)
 
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        add_executable(hkb_injection_test
-                tests/HotkeyInjectionTest.cpp
-                src/ArchitectureDetector.cpp
-                src/Injector.cpp
-                src/RemoteInjector.cpp
-                src/Win32Support.cpp
-        )
-        target_include_directories(hkb_injection_test PRIVATE src)
-        hkb_configure_target(hkb_injection_test)
-        target_link_libraries(hkb_injection_test PRIVATE ole32 shell32 user32)
-        add_dependencies(hkb_injection_test hotkey_hook hotkey_probe)
-        add_test(NAME hkb_register_hotkey_injection COMMAND hkb_injection_test)
+    add_executable(hkb_injection_test
+            tests/HotkeyInjectionTest.cpp
+            src/ArchitectureDetector.cpp
+            src/Injector.cpp
+            src/HotkeyPolicyTransport.cpp
+            src/RemoteInjector.cpp
+            src/Win32Support.cpp
+    )
+    target_include_directories(hkb_injection_test PRIVATE src)
+    hkb_configure_target(hkb_injection_test)
+    target_link_libraries(hkb_injection_test PRIVATE ole32 shell32 user32)
+    add_dependencies(hkb_injection_test hotkey_hook hotkey_probe)
+    add_test(NAME hkb_register_hotkey_injection COMMAND hkb_injection_test)
 
-        add_executable(hkb_blocker_service_integration_test
-                tests/BlockerServiceIntegrationTest.cpp
-                src/ArchitectureDetector.cpp
-                src/BlockerService.cpp
-                src/Injector.cpp
-                src/InjectionOperationReaper.cpp
-                src/HotkeyPolicyTransport.cpp
-                src/Logger.cpp
-                src/PathUtils.cpp
-                src/ProcessMonitor.cpp
-                src/RemoteInjector.cpp
-                src/Win32Support.cpp
-        )
-        target_include_directories(hkb_blocker_service_integration_test PRIVATE src)
-        hkb_configure_target(hkb_blocker_service_integration_test)
-        target_link_libraries(hkb_blocker_service_integration_test PRIVATE
-                ole32
-                shell32
-                user32
-        )
-        add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
-        add_test(NAME hkb_blocker_service_integration
-                COMMAND hkb_blocker_service_integration_test)
+    add_executable(hkb_blocker_service_integration_test
+            tests/BlockerServiceIntegrationTest.cpp
+            src/ArchitectureDetector.cpp
+            src/BlockerService.cpp
+            src/Injector.cpp
+            src/InjectionOperationReaper.cpp
+            src/HotkeyPolicyTransport.cpp
+            src/Logger.cpp
+            src/PathUtils.cpp
+            src/ProcessMonitor.cpp
+            src/RemoteInjector.cpp
+            src/Win32Support.cpp
+    )
+    target_include_directories(hkb_blocker_service_integration_test PRIVATE src)
+    hkb_configure_target(hkb_blocker_service_integration_test)
+    target_link_libraries(hkb_blocker_service_integration_test PRIVATE
+            ole32
+            shell32
+            user32
+    )
+    add_dependencies(hkb_blocker_service_integration_test hotkey_hook hotkey_probe)
+    add_test(NAME hkb_blocker_service_integration
+            COMMAND hkb_blocker_service_integration_test)
+    set_tests_properties(hkb_register_hotkey_injection hkb_blocker_service_integration
+            PROPERTIES RESOURCE_LOCK hkb_hotkeys TIMEOUT 60)
+    set_tests_properties(hkb_injection_identity PROPERTIES TIMEOUT 30)
+
+    set(HKB_TEST_X86_DIR "" CACHE PATH "Built x86 runtime and probe directory for cross-architecture tests")
+    if (CMAKE_SIZEOF_VOID_P EQUAL 8 AND HKB_TEST_X86_DIR)
+        add_custom_target(hkb_stage_x86_tests ALL
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:hkb_injection_test>/win32"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${HKB_TEST_X86_DIR}/HotkeyHook32.dll"
+                    "${HKB_TEST_X86_DIR}/HotkeyBlockerInjector32.exe"
+                    "${HKB_TEST_X86_DIR}/hotkey_probe.exe"
+                    "$<TARGET_FILE_DIR:hkb_injection_test>/win32"
+                VERBATIM)
+        add_test(NAME hkb_register_hotkey_injection_win32 COMMAND hkb_injection_test --win32)
+        add_test(NAME hkb_blocker_service_integration_win32
+                COMMAND hkb_blocker_service_integration_test --win32)
+        set_tests_properties(hkb_register_hotkey_injection_win32 hkb_blocker_service_integration_win32
+                PROPERTIES RESOURCE_LOCK hkb_hotkeys TIMEOUT 60)
     endif ()
 endif ()
 

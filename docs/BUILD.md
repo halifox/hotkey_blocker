@@ -79,7 +79,17 @@ ctest --test-dir build/x64-release-vcpkg --output-on-failure
 ctest --test-dir build/x86-release-vcpkg --output-on-failure
 ```
 
-测试覆盖配置读写、快捷键策略判定与持久化、Hotkey 注册注入以及 BlockerService 的进程生命周期。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
+测试覆盖配置读写、快捷键策略判定与持久化、进程身份校验、挂起目标的非阻塞注入、并发 Hotkey 注册注入以及 BlockerService 的进程生命周期。探针在启动时保留一个已注册快捷键，验证安装拦截器后它仍然存在，防止把“拦截器已就绪”误报为此前注册已被撤销。测试只注入自己创建的探针进程。
+
+先完成 x86 构建，再在 x64 开发环境中启用跨架构测试：
+
+```powershell
+cmake --preset x64-release "-DHKB_TEST_X86_DIR=$pwd/build/x86-release-vcpkg"
+cmake --build --preset x64-release --parallel
+ctest --test-dir build/x64-release-vcpkg --output-on-failure
+```
+
+该选项会将 x86 Hook、辅助程序和探针复制到 x64 测试目录的 `win32` 子目录，并增加两项 x64 → x86 测试。共享快捷键和策略表的测试通过 CTest 资源锁串行执行；不要在另一个构建目录同时运行它们，也不要同时运行主程序。仅构建产品目标时，可以在 CMake 配置阶段传入 `-DHKB_BUILD_TESTS=OFF`。
 
 ## 完整安装包
 
