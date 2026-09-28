@@ -1,5 +1,13 @@
 # 变更记录
 
+## [1.1.0](https://github.com/halifox/hotkey_blocker/compare/v1.0.4...v1.1.0) (2026-09-25)
+
+
+### Features
+
+* **release-test:** exercise patch release ([9694c60](https://github.com/halifox/hotkey_blocker/commit/9694c60d8598e2d67ecf1c75d0c3ff6e6021ffe1))
+* **release-test:** exercise patch release ([ef27559](https://github.com/halifox/hotkey_blocker/commit/ef2755936ddfea6d9bbbc40b1a254013955eb613))
+
 ## [1.0.4] - 2026-09-22
 
 ### Added
