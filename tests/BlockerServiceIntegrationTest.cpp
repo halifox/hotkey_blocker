@@ -194,7 +194,7 @@ int wmain() {
     int result = 6;
     std::wstring detail;
     if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0 &&
-        WaitForStatus(service, waiter, AppStatus::Blocked, 10000, detail)) {
+        WaitForStatus(service, waiter, AppStatus::HookReady, 10000, detail)) {
         SetEvent(release);
         if (WaitForSingleObject(processInfo.hProcess, 10000) == WAIT_OBJECT_0) {
             DWORD childExitCode = 1;
@@ -211,7 +211,7 @@ int wmain() {
             }
         }
     } else {
-        std::wcerr << L"服务未进入已拦截状态：" << detail << L'\n';
+        std::wcerr << L"服务未进入拦截器就绪状态：" << detail << L'\n';
         SetEvent(release);
     }
 

@@ -175,7 +175,7 @@ void MainFrame::UpdateAutoStart() {
 bool MainFrame::IsActionableStatus(AppStatus status) noexcept {
     switch (status) {
         case AppStatus::RestartRequired:
-        case AppStatus::PartiallyBlocked:
+        case AppStatus::PartiallyReady:
         case AppStatus::InjectionFailed:
         case AppStatus::PathMissing:
         case AppStatus::MonitoringUnavailable:
@@ -183,7 +183,7 @@ bool MainFrame::IsActionableStatus(AppStatus status) noexcept {
         case AppStatus::Waiting:
         case AppStatus::Injecting:
         case AppStatus::InjectionPending:
-        case AppStatus::Blocked:
+        case AppStatus::HookReady:
         case AppStatus::Disabled:
         default:
             return false;

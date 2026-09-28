@@ -20,8 +20,8 @@ enum class AppStatus {
     Injecting,
     InjectionPending,
     RestartRequired,
-    Blocked,
-    PartiallyBlocked,
+    HookReady,
+    PartiallyReady,
     InjectionFailed,
     PathMissing,
     Disabled,
@@ -75,7 +75,7 @@ private:
         Queued,
         Injecting,
         Pending,
-        Blocked,
+        HookReady,
         Failed,
     };
 
