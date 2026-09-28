@@ -1,5 +1,13 @@
 # 变更记录
 
+## [1.1.1](https://github.com/halifox/hotkey_blocker/compare/v1.1.0...v1.1.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **installer:** avoid self-locking during uninstall checks ([5c78913](https://github.com/halifox/hotkey_blocker/commit/5c789133708147f57dc0100ec1aa801746075ddc))
+* **installer:** avoid self-locking during uninstall checks ([4a4ee4d](https://github.com/halifox/hotkey_blocker/commit/4a4ee4d4eff20320618ecbb62205fb6719eb190b))
+
 ## [1.1.0](https://github.com/halifox/hotkey_blocker/compare/v1.0.4...v1.1.0) (2026-09-25)
 
 
