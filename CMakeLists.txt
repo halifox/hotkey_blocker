@@ -297,12 +297,18 @@ hkb_preinstall_check_complete:
 ]=])
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [=[
 IfFileExists \"$INSTDIR\\HotkeyBlocker.exe\" 0 hkb_uninstall_preflight_complete
+InitPluginsDir
 ClearErrors
-ExecWait '\"$INSTDIR\\HotkeyBlocker.exe\" --prepare-uninstaller-change \"$INSTDIR\"' $0
+CopyFiles /SILENT \"$INSTDIR\\HotkeyBlocker.exe\" \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
 IfErrors hkb_uninstall_helper_launch_failed
+ClearErrors
+ExecWait '\"$PLUGINSDIR\\HkbInstallerSupport.exe\" --prepare-uninstaller-change \"$INSTDIR\"' $0
+IfErrors hkb_uninstall_helper_launch_failed
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
 IntCmp $0 0 hkb_uninstall_preflight_complete
 Quit
 hkb_uninstall_helper_launch_failed:
+Delete \"$PLUGINSDIR\\HkbInstallerSupport.exe\"
 MessageBox MB_OK|MB_ICONSTOP \"无法启动卸载前检查，卸载已取消。请重新运行卸载程序。\"
 Quit
 hkb_uninstall_preflight_complete:
